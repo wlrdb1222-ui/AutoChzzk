@@ -1,0 +1,4 @@
+requests
+faster-whisper
+tqdm
+google-genai
