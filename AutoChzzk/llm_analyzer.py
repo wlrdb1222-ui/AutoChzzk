@@ -1,9 +1,10 @@
 """
 llm_analyzer.py
-전사된 자막(json/텍스트)을 Gemini로 분석해 하이라이트를 추출하는 모듈.
+전사된 자막(및 선택적으로 채팅 통계)을 Gemini로 분석해 하이라이트를 추출하는 모듈.
 """
 
 import os
+import csv
 import json
 import re
 from pathlib import Path
@@ -13,11 +14,12 @@ from .llm_client import get_llm_client
 
 
 # --------------------------------------------------
-# 설정값 (거의 안 바뀌는 값들 - 필요하면 여기서 직접 수정)
+# 설정값
 # --------------------------------------------------
 
 MODEL_NAME = "gemini-3.5-flash"
 OUTPUT_DIR = "/content/analysis"
+CHAT_SPIKE_THRESHOLD = 1.5  # 평균 대비 몇 배부터 "급증"으로 볼지
 
 PROMPT_TEMPLATE = """
 너는 생방송 전사 스크립트를 분석해서 타임라인 하이라이트를 뽑는 어시스턴트다.
@@ -33,10 +35,14 @@ PROMPT_TEMPLATE = """
 주의사항:
 - 화제 전환 기준으로만 포인트 생성
 - 중복 구간은 다시 생성하지 말 것
+{chat_instruction}
 
 [자막 데이터]
 {subtitle_text}
+{chat_section}
 """
+
+CHAT_INSTRUCTION = "- 채팅 반응 데이터에서 급증 구간과 화제/시간대가 겹치면 fun_score에 가산점을 줘라"
 
 
 # --------------------------------------------------
@@ -57,13 +63,67 @@ def load_subtitle(subtitle_path: Path) -> str:
 
 
 # --------------------------------------------------
-# 2. LLM 분석 실행
+# 2. 채팅 통계 로드 + 요약
 # --------------------------------------------------
 
-def run_llm_analysis(subtitle_text: str) -> str:
-    """자막 텍스트를 프롬프트에 담아 LLM에 분석을 요청하고 원본 응답 텍스트를 반환한다."""
+def load_chat_data(chat_data_path: Path) -> list[dict]:
+    """csv로 저장된 채팅 구간 통계를 로드한다."""
+    if not os.path.exists(chat_data_path):
+        raise FileNotFoundError(f"채팅 데이터 파일을 찾을 수 없습니다: {chat_data_path}")
+
+    with open(chat_data_path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        return [
+            {"start": int(row["start"]), "end": int(row["end"]), "count": int(row["count"])}
+            for row in reader
+        ]
+
+
+def build_chat_summary_text(buckets: list[dict], mode: str = "spike") -> str:
+    """
+    채팅 구간 통계를 프롬프트용 텍스트로 변환한다.
+    - mode="full": 전체 구간 수치를 그대로 나열 (토큰 많이 씀, LLM이 직접 판단)
+    - mode="spike": 평균 대비 급증한 구간만 요약해서 전달 (토큰 절약, 우리가 미리 판단)
+    """
+    if not buckets:
+        return ""
+
+    if mode == "full":
+        lines = [f"{b['start']}~{b['end']}초: {b['count']}개" for b in buckets]
+        return "\n".join(lines)
+
+    if mode == "spike":
+        avg = sum(b["count"] for b in buckets) / len(buckets)
+        spikes = [b for b in buckets if b["count"] >= avg * CHAT_SPIKE_THRESHOLD]
+
+        if not spikes:
+            return "채팅 반응이 평소와 비슷한 수준으로 유지되어 특별한 급증 구간이 없습니다."
+
+        lines = [
+            f"{s['start']}~{s['end']}초: 평균 대비 {s['count'] / avg:.1f}배 ({s['count']}개)"
+            for s in spikes
+        ]
+        return "채팅 급증 구간:\n" + "\n".join(lines)
+
+    raise ValueError(f"알 수 없는 mode: {mode} (full 또는 spike만 지원)")
+
+
+# --------------------------------------------------
+# 3. LLM 분석 실행
+# --------------------------------------------------
+
+def run_llm_analysis(subtitle_text: str, chat_summary_text: str = "") -> str:
+    """자막(+채팅 요약)을 프롬프트에 담아 LLM에 분석을 요청하고 원본 응답 텍스트를 반환한다."""
     client = get_llm_client()
-    prompt = PROMPT_TEMPLATE.format(subtitle_text=subtitle_text)
+
+    chat_section = f"\n[채팅 반응 데이터]\n{chat_summary_text}" if chat_summary_text else ""
+    chat_instruction = CHAT_INSTRUCTION if chat_summary_text else ""
+
+    prompt = PROMPT_TEMPLATE.format(
+        subtitle_text=subtitle_text,
+        chat_section=chat_section,
+        chat_instruction=chat_instruction,
+    )
 
     print(f"\n{MODEL_NAME} 모델이 자막을 분석 중입니다...")
     response = client.models.generate_content(
@@ -74,21 +134,15 @@ def run_llm_analysis(subtitle_text: str) -> str:
 
 
 # --------------------------------------------------
-# 3. 응답 파싱
+# 4. 응답 파싱
 # --------------------------------------------------
 
 def parse_analysis_result(raw_text: str) -> list[dict]:
-    """
-    LLM 원본 응답 텍스트를 JSON으로 파싱한다.
-    마크다운 코드블록으로 감싸져 있거나 앞뒤 설명이 붙어있는 경우를 방어한다.
-    """
+    """LLM 원본 응답 텍스트를 JSON으로 파싱한다 (코드블록/여분 텍스트 방어 포함)."""
     text = raw_text.strip()
-
-    # ```json ... ``` 코드블록 제거
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
 
-    # 첫 '[' 부터 마지막 ']' 까지만 추출 (앞뒤 설명 텍스트 방어)
     start = text.find("[")
     end = text.rfind("]")
     if start == -1 or end == -1:
@@ -103,7 +157,7 @@ def parse_analysis_result(raw_text: str) -> list[dict]:
 
 
 # --------------------------------------------------
-# 4. 결과 저장
+# 5. 결과 저장
 # --------------------------------------------------
 
 def save_analysis(audio_name: str, results: list[dict]) -> Path:
@@ -126,14 +180,19 @@ def save_analysis(audio_name: str, results: list[dict]) -> Path:
 
 
 # --------------------------------------------------
-# 5. 조립 함수 (수동/자동 겸용)
+# 6. 조립 함수 (수동/자동 겸용)
 # --------------------------------------------------
 
-def analyze_subtitle(subtitle_path: Optional[str] = None) -> Path:
+def analyze_subtitle(
+    subtitle_path: Optional[str] = None,
+    chat_data_path: Optional[str] = None,
+    chat_summary_mode: str = "spike",
+) -> Path:
     """
     자막 파일을 읽어 LLM 분석 결과를 json 파일로 저장하고, 그 경로를 반환한다.
     - subtitle_path가 없으면 input()으로 받는다.
-    - 모델명/프롬프트는 모듈 상단 상수를 직접 참조한다.
+    - chat_data_path가 있으면 채팅 통계를 함께 고려해 분석한다 (없으면 기존처럼 자막만 사용).
+    - chat_summary_mode: "spike"(기본, 급증 구간만 요약) 또는 "full"(전체 수치 나열)
     """
     if subtitle_path is None:
         subtitle_path = input("자막 파일 경로: ").strip()
@@ -142,7 +201,13 @@ def analyze_subtitle(subtitle_path: Optional[str] = None) -> Path:
     audio_name = subtitle_path.stem
 
     subtitle_text = load_subtitle(subtitle_path)
-    raw_result = run_llm_analysis(subtitle_text)
+
+    chat_summary_text = ""
+    if chat_data_path is not None:
+        buckets = load_chat_data(Path(chat_data_path))
+        chat_summary_text = build_chat_summary_text(buckets, mode=chat_summary_mode)
+
+    raw_result = run_llm_analysis(subtitle_text, chat_summary_text)
     parsed_result = parse_analysis_result(raw_result)
 
     return save_analysis(audio_name, parsed_result)
