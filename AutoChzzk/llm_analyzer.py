@@ -20,11 +20,11 @@ from .llm_client import get_llm_client
 MODEL_NAME = "gemini-3.5-flash"
 OUTPUT_DIR = "/content/analysis"
 CHAT_SPIKE_THRESHOLD = 1.5  # 평균 대비 몇 배부터 "급증"으로 볼지
+MIN_INTERVAL_SEC = 300      # 최소 이 간격(초)마다 포인트 하나는 나오도록 유도 (기본 5분)
 
 PROMPT_TEMPLATE = """
 너는 생방송 전사 스크립트를 분석해서 타임라인 하이라이트를 뽑는 어시스턴트다.
 주어진 발화 구간(시간, 텍스트)을 순서대로 읽으면서, 화제나 상황이 바뀌는 지점마다 포인트를 하나씩 찍어라.
-같은 화제가 계속 이어지는 동안에는 억지로 찍지 않아도 된다.
 
 각 포인트마다 아래 항목을 채워서 JSON 배열로만 응답하라. 다른 설명은 절대 추가하지 마라.
 
@@ -33,8 +33,10 @@ PROMPT_TEMPLATE = """
 - comment: 짧은 한줄 코멘트 (구어체)
 
 주의사항:
-- 화제 전환 기준으로만 포인트 생성
 - 중복 구간은 다시 생성하지 말 것
+- 재미있는 순간만 고르지 말고, 특별히 임팩트가 없는 잡담/일상 구간도 fun_score 1~2로 포함시켜서
+  방송 전체 타임라인을 빠짐없이, 고르게 커버해라
+{density_instruction}
 {chat_instruction}
 
 [자막 데이터]
@@ -60,6 +62,36 @@ def load_subtitle(subtitle_path: Path) -> str:
     except UnicodeDecodeError:
         with open(subtitle_path, "r", encoding="cp949") as f:
             return f.read()
+
+
+def get_subtitle_duration(subtitle_text: str) -> Optional[float]:
+    """
+    transcriber.py가 만든 자막 json에서 전체 길이(초)를 추정한다.
+    segments 리스트의 마지막 end 값을 사용한다. 실패하면 None을 반환한다.
+    """
+    try:
+        data = json.loads(subtitle_text)
+        segments = data.get("segments")
+        if not segments:
+            return None
+        return max(seg["end"] for seg in segments if "end" in seg)
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def build_density_instruction(duration_sec: Optional[float]) -> str:
+    """전체 길이를 바탕으로 '최소 몇 개 이상 만들어라'는 지침 문장을 만든다."""
+    if not duration_sec or duration_sec <= 0:
+        return ""
+
+    min_points = max(1, int(duration_sec // MIN_INTERVAL_SEC))
+    duration_min = round(duration_sec / 60, 1)
+
+    return (
+        f"- 전체 방송 길이는 약 {duration_min}분이다. "
+        f"{MIN_INTERVAL_SEC // 60}분마다 최소 한 개씩, 총 {min_points}개 이상의 포인트를 만들어라. "
+        f"이 기준을 지키기 위해 필요하다면 임팩트가 낮은 구간도 fun_score 1~2로 포함시켜라."
+    )
 
 
 # --------------------------------------------------
@@ -112,8 +144,12 @@ def build_chat_summary_text(buckets: list[dict], mode: str = "spike") -> str:
 # 3. LLM 분석 실행
 # --------------------------------------------------
 
-def run_llm_analysis(subtitle_text: str, chat_summary_text: str = "") -> str:
-    """자막(+채팅 요약)을 프롬프트에 담아 LLM에 분석을 요청하고 원본 응답 텍스트를 반환한다."""
+def run_llm_analysis(
+    subtitle_text: str,
+    chat_summary_text: str = "",
+    density_instruction: str = "",
+) -> str:
+    """자막(+채팅 요약, +밀도 지침)을 프롬프트에 담아 LLM에 분석을 요청하고 원본 응답 텍스트를 반환한다."""
     client = get_llm_client()
 
     chat_section = f"\n[채팅 반응 데이터]\n{chat_summary_text}" if chat_summary_text else ""
@@ -123,6 +159,7 @@ def run_llm_analysis(subtitle_text: str, chat_summary_text: str = "") -> str:
         subtitle_text=subtitle_text,
         chat_section=chat_section,
         chat_instruction=chat_instruction,
+        density_instruction=density_instruction,
     )
 
     print(f"\n{MODEL_NAME} 모델이 자막을 분석 중입니다...")
@@ -193,6 +230,7 @@ def analyze_subtitle(
     - subtitle_path가 없으면 input()으로 받는다.
     - chat_data_path가 있으면 채팅 통계를 함께 고려해 분석한다 (없으면 기존처럼 자막만 사용).
     - chat_summary_mode: "spike"(기본, 급증 구간만 요약) 또는 "full"(전체 수치 나열)
+    - 자막의 전체 길이를 계산해, 최소 밀도(MIN_INTERVAL_SEC)를 만족하도록 지침을 자동 추가한다.
     """
     if subtitle_path is None:
         subtitle_path = input("자막 파일 경로: ").strip()
@@ -202,12 +240,15 @@ def analyze_subtitle(
 
     subtitle_text = load_subtitle(subtitle_path)
 
+    duration_sec = get_subtitle_duration(subtitle_text)
+    density_instruction = build_density_instruction(duration_sec)
+
     chat_summary_text = ""
     if chat_data_path is not None:
         buckets = load_chat_data(Path(chat_data_path))
         chat_summary_text = build_chat_summary_text(buckets, mode=chat_summary_mode)
 
-    raw_result = run_llm_analysis(subtitle_text, chat_summary_text)
+    raw_result = run_llm_analysis(subtitle_text, chat_summary_text, density_instruction)
     parsed_result = parse_analysis_result(raw_result)
 
     return save_analysis(audio_name, parsed_result)

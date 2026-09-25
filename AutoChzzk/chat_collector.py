@@ -6,11 +6,14 @@ chat_collector.py
 
 import csv
 import json
+import os
 import urllib.request
 import urllib.error
 from pathlib import Path
 from typing import Optional
+
 from .downloader import get_video_info_by_id
+
 
 # --------------------------------------------------
 # 설정값
@@ -104,7 +107,6 @@ def aggregate_by_bucket(chats: list[dict], bucket_sec: int = BUCKET_SEC) -> list
 
 def save_chat_data(video_id: int, video_title: str, buckets: list[dict]) -> Path:
     """구간별 채팅 통계를 csv로 저장하고 저장 경로를 반환한다."""
-    import os
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     clean_title = video_title.replace("/", "_").replace("\\", "_")
@@ -122,9 +124,6 @@ def save_chat_data(video_id: int, video_title: str, buckets: list[dict]) -> Path
 # --------------------------------------------------
 # 5. 조립 함수 (수동/자동 겸용)
 # --------------------------------------------------
-
-
-
 
 def collect_chat_data(
     video_id: Optional[str] = None,

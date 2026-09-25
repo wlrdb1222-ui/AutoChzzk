@@ -25,7 +25,7 @@ DEFAULT_HEADERS = {
 # --------------------------------------------------
 
 def get_video_info_by_id(video_no) -> dict:
-    """video_no(숫자)로 직접 VOD 정보를 조회한다."""
+    """video_no(숫자/문자열 ID)로 직접 VOD 정보를 조회한다."""
     info_url = f"https://api.chzzk.naver.com/service/v2/videos/{video_no}"
 
     response = requests.get(info_url, headers=DEFAULT_HEADERS, timeout=10)
