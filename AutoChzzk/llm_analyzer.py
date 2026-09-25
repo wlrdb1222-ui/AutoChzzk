@@ -16,7 +16,7 @@ from .llm_client import get_llm_client
 # --------------------------------------------------
 # 설정값
 # --------------------------------------------------
-MODEL_NAME = "gemini-3.5-flash"
+MODEL_NAME = "gemini-3.8-flash"
 OUTPUT_DIR = "/content/analysis"
 
 
