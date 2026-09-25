@@ -24,13 +24,8 @@ DEFAULT_HEADERS = {
 # 1. VOD 정보 조회
 # --------------------------------------------------
 
-def get_video_info(vod_url: str) -> dict:
-    """VOD URL로부터 video_no, video_id, in_key, title 등을 조회한다."""
-    match = re.search(r"/video/(\d+)", vod_url)
-    if not match:
-        raise ValueError(f"VOD URL에서 video_no를 찾을 수 없습니다: {vod_url}")
-
-    video_no = match.group(1)
+def get_video_info_by_id(video_no) -> dict:
+    """video_no(숫자)로 직접 VOD 정보를 조회한다."""
     info_url = f"https://api.chzzk.naver.com/service/v2/videos/{video_no}"
 
     response = requests.get(info_url, headers=DEFAULT_HEADERS, timeout=10)
@@ -38,11 +33,20 @@ def get_video_info(vod_url: str) -> dict:
     content = response.json()["content"]
 
     return {
-        "video_no": video_no,
+        "video_no": str(video_no),
         "video_id": content["videoId"],
         "in_key": content["inKey"],
         "title": content["videoTitle"],
     }
+
+
+def get_video_info(vod_url: str) -> dict:
+    """VOD URL로부터 video_no를 파싱한 뒤 VOD 정보를 조회한다."""
+    match = re.search(r"/video/(\d+)", vod_url)
+    if not match:
+        raise ValueError(f"VOD URL에서 video_no를 찾을 수 없습니다: {vod_url}")
+
+    return get_video_info_by_id(match.group(1))
 
 
 # --------------------------------------------------
