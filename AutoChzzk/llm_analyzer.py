@@ -4,6 +4,8 @@ llm_analyzer.py
 """
 
 import os
+import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +17,7 @@ from .llm_client import get_llm_client
 # --------------------------------------------------
 
 MODEL_NAME = "gemini-3.5-flash"
+OUTPUT_DIR = "/content/analysis"
 
 PROMPT_TEMPLATE = """
 너는 생방송 전사 스크립트를 분석해서 타임라인 하이라이트를 뽑는 어시스턴트다.
@@ -58,7 +61,7 @@ def load_subtitle(subtitle_path: Path) -> str:
 # --------------------------------------------------
 
 def run_llm_analysis(subtitle_text: str) -> str:
-    """자막 텍스트를 프롬프트에 담아 LLM에 분석을 요청하고 결과 텍스트를 반환한다."""
+    """자막 텍스트를 프롬프트에 담아 LLM에 분석을 요청하고 원본 응답 텍스트를 반환한다."""
     client = get_llm_client()
     prompt = PROMPT_TEMPLATE.format(subtitle_text=subtitle_text)
 
@@ -71,24 +74,80 @@ def run_llm_analysis(subtitle_text: str) -> str:
 
 
 # --------------------------------------------------
-# 3. 조립 함수 (수동/자동 겸용)
+# 3. 응답 파싱
 # --------------------------------------------------
 
-def analyze_subtitle(subtitle_path: Optional[str] = None) -> str:
+def parse_analysis_result(raw_text: str) -> list[dict]:
     """
-    자막 파일을 읽어 LLM 분석 결과를 반환한다.
+    LLM 원본 응답 텍스트를 JSON으로 파싱한다.
+    마크다운 코드블록으로 감싸져 있거나 앞뒤 설명이 붙어있는 경우를 방어한다.
+    """
+    text = raw_text.strip()
+
+    # ```json ... ``` 코드블록 제거
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+
+    # 첫 '[' 부터 마지막 ']' 까지만 추출 (앞뒤 설명 텍스트 방어)
+    start = text.find("[")
+    end = text.rfind("]")
+    if start == -1 or end == -1:
+        raise ValueError(f"응답에서 JSON 배열을 찾을 수 없습니다:\n{raw_text}")
+
+    json_text = text[start:end + 1]
+
+    try:
+        return json.loads(json_text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"JSON 파싱에 실패했습니다: {e}\n원본 텍스트:\n{raw_text}")
+
+
+# --------------------------------------------------
+# 4. 결과 저장
+# --------------------------------------------------
+
+def save_analysis(audio_name: str, results: list[dict]) -> Path:
+    """분석 결과를 json으로 저장하고 저장 경로를 반환한다."""
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    payload = {
+        "audio_source": audio_name,
+        "model": MODEL_NAME,
+        "num_points": len(results),
+        "highlights": results,
+    }
+
+    out_path = Path(OUTPUT_DIR) / f"{audio_name}_analysis.json"
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    print(f"[저장 완료] {out_path}")
+    return out_path
+
+
+# --------------------------------------------------
+# 5. 조립 함수 (수동/자동 겸용)
+# --------------------------------------------------
+
+def analyze_subtitle(subtitle_path: Optional[str] = None) -> Path:
+    """
+    자막 파일을 읽어 LLM 분석 결과를 json 파일로 저장하고, 그 경로를 반환한다.
     - subtitle_path가 없으면 input()으로 받는다.
     - 모델명/프롬프트는 모듈 상단 상수를 직접 참조한다.
     """
     if subtitle_path is None:
         subtitle_path = input("자막 파일 경로: ").strip()
 
+    subtitle_path = Path(subtitle_path)
+    audio_name = subtitle_path.stem
+
     subtitle_text = load_subtitle(subtitle_path)
-    return run_llm_analysis(subtitle_text)
+    raw_result = run_llm_analysis(subtitle_text)
+    parsed_result = parse_analysis_result(raw_result)
+
+    return save_analysis(audio_name, parsed_result)
 
 
 if __name__ == "__main__":
-    result = analyze_subtitle()
-    print("\n" + "=" * 30 + " 분석 결과 " + "=" * 30)
-    print(result)
-    print("=" * 71)
+    result_path = analyze_subtitle()
+    print(f"\n분석 결과 저장 위치: {result_path}")
