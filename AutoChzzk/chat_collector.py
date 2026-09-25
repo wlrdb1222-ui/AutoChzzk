@@ -10,7 +10,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 from typing import Optional
-
+from .downloader import get_video_info_by_id
 
 # --------------------------------------------------
 # 설정값
@@ -123,6 +123,9 @@ def save_chat_data(video_id: int, video_title: str, buckets: list[dict]) -> Path
 # 5. 조립 함수 (수동/자동 겸용)
 # --------------------------------------------------
 
+
+
+
 def collect_chat_data(
     video_id: Optional[str] = None,
     video_title: Optional[str] = None,
@@ -130,14 +133,18 @@ def collect_chat_data(
     """
     VOD의 채팅 통계를 수집해 csv로 저장하고 그 경로를 반환한다.
     - video_id가 없으면 input()으로 받는다 (URL도 허용).
-    - video_title이 없으면 input()으로 받는다 (파일명용).
+    - video_title이 없으면 video_id로 VOD 정보를 조회해 자동으로 채운다.
     """
     if video_id is None:
         video_id = input("영상 ID 또는 URL: ").strip()
-    if video_title is None:
-        video_title = input("영상 제목(파일명용): ").strip()
 
     parsed_id = parse_video_id(video_id)
+
+    if video_title is None:
+        info = get_video_info_by_id(parsed_id)
+        video_title = info["title"]
+        print(f"제목 자동 조회: {video_title}")
+
     chats = fetch_all_chats(parsed_id)
     buckets = aggregate_by_bucket(chats)
 
