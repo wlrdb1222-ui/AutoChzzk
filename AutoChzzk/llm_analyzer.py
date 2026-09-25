@@ -16,6 +16,9 @@ from .llm_client import get_llm_client
 # --------------------------------------------------
 # 설정값
 # --------------------------------------------------
+MODEL_NAME = "gemini-3.5-flash"
+OUTPUT_DIR = "/content/analysis"
+
 
 CHAT_SPIKE_THRESHOLD = 1.5
 MIN_INTERVAL_SEC = 300
