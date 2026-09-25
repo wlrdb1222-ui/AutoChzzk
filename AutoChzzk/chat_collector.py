@@ -128,11 +128,13 @@ def save_chat_data(video_id: int, video_title: str, buckets: list[dict]) -> Path
 def collect_chat_data(
     video_id: Optional[str] = None,
     video_title: Optional[str] = None,
-) -> Path:
+) -> Optional[Path]:
     """
     VOD의 채팅 통계를 수집해 csv로 저장하고 그 경로를 반환한다.
     - video_id가 없으면 input()으로 받는다 (URL도 허용).
     - video_title이 없으면 video_id로 VOD 정보를 조회해 자동으로 채운다.
+    - 채팅을 가져올 수 없는 영상(다시보기 채팅 미지원 등)이면 에러 메시지만 출력하고
+      None을 반환한다. 호출부는 None이면 채팅 없이 다음 단계를 진행하면 된다.
     """
     if video_id is None:
         video_id = input("영상 ID 또는 URL: ").strip()
@@ -144,7 +146,16 @@ def collect_chat_data(
         video_title = info["title"]
         print(f"제목 자동 조회: {video_title}")
 
-    chats = fetch_all_chats(parsed_id)
+    try:
+        chats = fetch_all_chats(parsed_id)
+    except RuntimeError as e:
+        print(f"[채팅 수집 불가] 이 영상은 채팅 데이터를 가져올 수 없습니다: {e}")
+        return None
+
+    if not chats:
+        print("[채팅 없음] 수집된 채팅이 없습니다.")
+        return None
+
     buckets = aggregate_by_bucket(chats)
 
     return save_chat_data(parsed_id, video_title, buckets)
