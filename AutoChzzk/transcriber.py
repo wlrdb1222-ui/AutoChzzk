@@ -54,7 +54,12 @@ def run_transcription(
 ) -> tuple[list[dict], float]:
     """오디오를 전사하고 (구간 리스트, 소요시간)을 반환한다."""
     t0 = time.time()
-
+    initial_prompt = """
+        한국어 방송 전사입니다.
+        가능하면 하나의 전사 구간(segment)에 하나의 문장만 포함하도록 합니다.
+        문장이 끝나면 다음 문장과 분리하여 전사합니다.
+        여러 문장을 하나의 긴 구간으로 묶지 않습니다.
+        """
     segments, info = model.transcribe(
         str(audio_path),
         language=LANGUAGE,
