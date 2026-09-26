@@ -56,19 +56,24 @@ def run_transcription(
     t0 = time.time()
 
     segments, info = model.transcribe(
-        str(audio_path),
-        language=LANGUAGE,
-        initial_prompt=initial_prompt,
-        condition_on_previous_text=True,
-        beam_size=10,
-        temperature=0.0,
-        vad_filter=True,
-        vad_parameters=dict(
-            min_silence_duration_ms=500,
-            speech_pad_ms=300,
-        ),
-        word_timestamps=False,
-        batch_size=16,
+            str(audio_path),
+            language=LANGUAGE,
+            initial_prompt=initial_prompt,
+        
+            condition_on_previous_text=False,
+        
+            beam_size=10,
+            temperature=0.0,
+        
+            vad_filter=True,
+            vad_parameters=dict(
+                min_silence_duration_ms=500,
+                speech_pad_ms=300,
+            ),
+        
+            word_timestamps=False,
+            batch_size=16,
+        ) batch_size=16,
     )
 
     results = []
