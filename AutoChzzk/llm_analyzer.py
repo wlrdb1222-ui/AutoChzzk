@@ -34,6 +34,10 @@ MAX_EVENT_INTERVAL_SEC = 300
 PROMPT_PATH = Path(__file__).parent / "prompts" / "prompt.txt"
 
 def load_prompt():
+    if not PROMPT_PATH.exists():
+        raise FileNotFoundError(
+            f"프롬프트 파일을 찾을 수 없습니다: {PROMPT_PATH}"
+        )
     return PROMPT_PATH.read_text(encoding="utf-8")
 # --------------------------------------------------
 # 이벤트 밀도 지침
