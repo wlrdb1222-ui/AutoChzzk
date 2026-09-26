@@ -35,16 +35,6 @@ PROMPT_PATH = Path(__file__).parent / "prompts" / "prompt.txt"
 
 def load_prompt():
     return PROMPT_PATH.read_text(encoding="utf-8")
-
-rompt_template = load_prompt()
-
-prompt = prompt_template.format(
-    density_instruction=density_instruction,
-    chat_instruction=chat_instruction,
-    subtitle_text=subtitle_text,
-    chat_section=chat_section,
-)
-
 # --------------------------------------------------
 # 이벤트 밀도 지침
 # --------------------------------------------------
@@ -297,7 +287,9 @@ def run_llm_analysis(
         else ""
     )
 
-    prompt = PROMPT_TEMPLATE.format(
+    prompt_template = load_prompt()
+
+    prompt = prompt_template.format(
         subtitle_text=subtitle_text,
         chat_section=chat_section,
         chat_instruction=chat_instruction,
