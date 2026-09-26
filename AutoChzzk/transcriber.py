@@ -67,8 +67,8 @@ def run_transcription(
     
         vad_filter=True,
         vad_parameters=dict(
-            min_silence_duration_ms=500,
-            speech_pad_ms=300,
+            min_silence_duration_ms=250,
+            speech_pad_ms=200,
         ),
     
         word_timestamps=False,
