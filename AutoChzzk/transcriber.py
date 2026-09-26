@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from faster_whisper import WhisperModel, BatchedInferencePipeline
+from faster_whisper import WhisperModel
 from tqdm import tqdm
 
 
@@ -27,17 +27,16 @@ OUTPUT_DIR = "/content/transcripts"
 # 1. 모델 로드
 # --------------------------------------------------
 
-def load_model() -> BatchedInferencePipeline:
+def load_model() -> WhisperModel:
     """faster-whisper 모델을 로드한다."""
     print(f"[로드] {MODEL_NAME} ({COMPUTE_TYPE}) 준비 중...")
     t0 = time.time()
 
-    base_model = WhisperModel(
+    model = WhisperModel(
         MODEL_NAME,
         device="cuda",
         compute_type=COMPUTE_TYPE,
     )
-    model = BatchedInferencePipeline(model=base_model)
 
     print(f"[로드 완료] {MODEL_NAME} - {time.time() - t0:.1f}초")
     return model
@@ -48,7 +47,7 @@ def load_model() -> BatchedInferencePipeline:
 # --------------------------------------------------
 
 def run_transcription(
-    model: BatchedInferencePipeline,
+    model: WhisperModel,
     audio_path: Path,
     initial_prompt: Optional[str] = None,
 ) -> tuple[list[dict], float]:
@@ -59,21 +58,20 @@ def run_transcription(
         str(audio_path),
         language=LANGUAGE,
         initial_prompt=initial_prompt,
-    
+
         condition_on_previous_text=False,
-    
+
         beam_size=10,
         temperature=0.0,
-    
+
         vad_filter=True,
         vad_parameters=dict(
             min_silence_duration_ms=250,
             speech_pad_ms=200,
             max_speech_duration_s=15,
         ),
-    
+
         word_timestamps=True,
-        batch_size=16,
     )
 
     results = []
@@ -91,7 +89,6 @@ def run_transcription(
     elapsed = time.time() - t0
     print(f"[전사 완료] {len(results)}개 구간 - {elapsed:.1f}초")
     return results, elapsed
-
 
 # --------------------------------------------------
 # 3. 결과 저장
