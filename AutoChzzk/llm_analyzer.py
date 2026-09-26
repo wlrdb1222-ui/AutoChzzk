@@ -24,29 +24,24 @@ from .llm_client import get_llm_client
 # --------------------------------------------------
 
 MODEL_NAME = "gemini-3.8-flash"
+
 OUTPUT_DIR = "/content/analysis"
 
-# 평균 채팅량 대비 몇 배부터 채팅 급증으로 판단할지
 CHAT_SPIKE_THRESHOLD = 1.5
 
-# 하나의 이벤트를 지나치게 길게 묶지 않기 위한 참고 기준
+# 이벤트가 지나치게 길어지는 것을 방지하기 위한 참고값
 MAX_EVENT_INTERVAL_SEC = 300
+
+PROMPT_PATH = Path(__file__).parent / "prompts" / "prompt.txt"
 
 
 # --------------------------------------------------
 # 프롬프트
 # --------------------------------------------------
 
-PROMPT_PATH = (
-    Path(__file__).parent
-    / "prompts"
-    / "prompt.txt"
-)
-
-
 def load_prompt() -> str:
     """
-    prompts/prompt.txt에서 LLM 분석 프롬프트를 읽는다.
+    prompts/prompt.txt의 전체 내용을 읽는다.
     """
 
     if not PROMPT_PATH.exists():
@@ -54,210 +49,220 @@ def load_prompt() -> str:
             f"프롬프트 파일을 찾을 수 없습니다: {PROMPT_PATH}"
         )
 
-    return PROMPT_PATH.read_text(
-        encoding="utf-8"
-    )
+    return PROMPT_PATH.read_text(encoding="utf-8")
 
 
-# --------------------------------------------------
-# 1. 자막 로드
-# --------------------------------------------------
-
-def load_subtitle(
-    subtitle_path: Path
+def build_prompt(
+    subtitle_text: str,
+    chat_section: str = "",
+    duration_sec: Optional[float] = None,
 ) -> str:
     """
-    자막 파일을 텍스트로 읽어 반환한다.
+    prompt.txt에 필요한 값을 삽입한다.
 
-    UTF-8을 우선 사용하고,
-    실패하면 CP949로 다시 읽는다.
+    str.format()을 사용하지 않는 이유:
+    prompt.txt 안에 JSON 예시처럼 중괄호가 포함될 수 있기 때문이다.
+
+    따라서 실제로 사용하는 변수만 명시적으로 치환한다.
     """
 
-    if not subtitle_path.exists():
-        raise FileNotFoundError(
-            f"자막 파일을 찾을 수 없습니다: {subtitle_path}"
-        )
+    prompt = load_prompt()
+
+    duration_min = 0
+
+    if duration_sec is not None:
+        duration_min = duration_sec / 60
+
+    replacements = {
+        "{subtitle_text}": subtitle_text,
+        "{chat_section}": chat_section,
+        "{chat_spike_threshold}": str(CHAT_SPIKE_THRESHOLD),
+        "{duration_min}": f"{duration_min:.2f}",
+        "{max_event_interval_sec}": str(MAX_EVENT_INTERVAL_SEC),
+    }
+
+    for placeholder, value in replacements.items():
+        prompt = prompt.replace(placeholder, value)
+
+    return prompt
+
+
+# --------------------------------------------------
+# 자막
+# --------------------------------------------------
+
+def load_subtitle(subtitle_path: Path) -> str:
+    """
+    자막 JSON 파일을 문자열 그대로 읽는다.
+    """
 
     try:
-        with open(
-            subtitle_path,
-            "r",
-            encoding="utf-8"
-        ) as f:
-            return f.read()
+        return subtitle_path.read_text(encoding="utf-8")
 
     except UnicodeDecodeError:
-        with open(
-            subtitle_path,
-            "r",
-            encoding="cp949"
-        ) as f:
-            return f.read()
+        return subtitle_path.read_text(encoding="cp949")
 
 
-def get_subtitle_duration(
-    subtitle_text: str
-) -> Optional[float]:
+def get_subtitle_duration(subtitle_text: str) -> Optional[float]:
     """
-    transcriber.py가 만든 자막 JSON에서
-    전체 방송 길이를 추정한다.
-
-    segments 리스트의 가장 마지막 end 값을 사용한다.
-
-    실패하면 None을 반환한다.
+    자막 JSON에서 가장 마지막 segment의 end 시간을 가져온다.
     """
 
     try:
-        data = json.loads(
-            subtitle_text
-        )
+        data = json.loads(subtitle_text)
 
-        segments = data.get(
-            "segments"
-        )
-
-        if not segments:
-            return None
-
-        end_times = [
-            seg["end"]
-            for seg in segments
-            if "end" in seg
-        ]
-
-        if not end_times:
-            return None
-
-        return max(end_times)
-
-    except (
-        json.JSONDecodeError,
-        KeyError,
-        TypeError,
-        ValueError
-    ):
+    except json.JSONDecodeError:
         return None
 
+    segments = data.get("segments", [])
+
+    if not segments:
+        return None
+
+    end_times = []
+
+    for segment in segments:
+        end = segment.get("end")
+
+        if isinstance(end, (int, float)):
+            end_times.append(end)
+
+    if not end_times:
+        return None
+
+    return max(end_times)
+
 
 # --------------------------------------------------
-# 2. 채팅 통계 로드
+# 채팅
 # --------------------------------------------------
 
-def load_chat_data(
-    chat_data_path: Path
-) -> list[dict]:
+def load_chat_data(chat_data_path: Path) -> list[dict]:
     """
-    CSV로 저장된 채팅 구간 통계를 로드한다.
+    채팅 통계 CSV를 읽는다.
 
     CSV 형식:
-
-    start,end,count
+        start,end,count
     """
 
-    if not chat_data_path.exists():
-        raise FileNotFoundError(
-            f"채팅 데이터 파일을 찾을 수 없습니다: "
-            f"{chat_data_path}"
-        )
+    buckets = []
 
-    with open(
-        chat_data_path,
+    with chat_data_path.open(
         "r",
-        encoding="utf-8",
-        newline=""
+        encoding="utf-8-sig",
+        newline="",
     ) as f:
 
         reader = csv.DictReader(f)
 
-        return [
-            {
-                "start": int(row["start"]),
-                "end": int(row["end"]),
-                "count": int(row["count"])
-            }
-            for row in reader
-        ]
+        for row in reader:
+            try:
+                start = int(float(row["start"]))
+                end = int(float(row["end"]))
+                count = int(float(row["count"]))
+
+            except (ValueError, KeyError):
+                continue
+
+            buckets.append(
+                {
+                    "start": start,
+                    "end": end,
+                    "count": count,
+                }
+            )
+
+    return buckets
 
 
 def build_chat_summary_text(
     buckets: list[dict],
-    mode: str = "spike"
+    mode: str = "spike",
 ) -> str:
     """
-    채팅 구간 통계를 LLM 프롬프트에 전달할 텍스트로 변환한다.
+    채팅 데이터를 LLM에 전달하기 위한 텍스트로 변환한다.
 
-    mode="full":
-        전체 구간의 채팅 수치를 전달한다.
-
-    mode="spike":
-        평균 대비 급증한 구간만 전달한다.
+    mode:
+        full  -> 전체 채팅 통계
+        spike -> 평균 대비 급증 구간만 전달
     """
 
     if not buckets:
-        return ""
+        return "채팅 데이터가 없습니다."
+
+    total_count = sum(
+        bucket["count"]
+        for bucket in buckets
+    )
+
+    average = total_count / len(buckets)
+
+    # ----------------------------------------------
+    # 전체 데이터
+    # ----------------------------------------------
 
     if mode == "full":
 
         lines = [
-            f"{bucket['start']}~{bucket['end']}초: "
-            f"{bucket['count']}개"
-            for bucket in buckets
+            f"전체 구간 평균 채팅 수: {average:.2f}",
+            "",
+            "시간대별 채팅 수:",
         ]
+
+        for bucket in buckets:
+            lines.append(
+                f'{bucket["start"]}~{bucket["end"]}초: '
+                f'{bucket["count"]}개'
+            )
 
         return "\n".join(lines)
 
+    # ----------------------------------------------
+    # 급증 구간
+    # ----------------------------------------------
+
     if mode == "spike":
 
-        average_count = (
-            sum(
-                bucket["count"]
-                for bucket in buckets
-            )
-            / len(buckets)
-        )
-
-        if average_count <= 0:
+        if average <= 0:
             return (
-                "채팅 데이터는 존재하지만 "
-                "평균 채팅량을 계산할 수 없습니다."
+                "채팅 평균을 계산할 수 없습니다. "
+                "채팅 급증 분석을 사용하지 마세요."
             )
 
-        spikes = [
-            bucket
-            for bucket in buckets
-            if bucket["count"]
-            >= average_count * CHAT_SPIKE_THRESHOLD
-        ]
+        spike_lines = []
 
-        if not spikes:
+        for bucket in buckets:
+
+            ratio = bucket["count"] / average
+
+            if ratio >= CHAT_SPIKE_THRESHOLD:
+                spike_lines.append(
+                    f'{bucket["start"]}~{bucket["end"]}초: '
+                    f'평균 대비 {ratio:.1f}배 '
+                    f'({bucket["count"]}개)'
+                )
+
+        if not spike_lines:
             return (
-                "채팅 반응이 평소와 비슷한 수준으로 유지되어 "
-                "특별한 급증 구간이 없습니다."
+                f"채팅 급증 구간이 없습니다. "
+                f"(급증 기준: 평균의 {CHAT_SPIKE_THRESHOLD:.1f}배)"
             )
-
-        lines = [
-            (
-                f"{spike['start']}~{spike['end']}초: "
-                f"평균 대비 "
-                f"{spike['count'] / average_count:.1f}배 "
-                f"({spike['count']}개)"
-            )
-            for spike in spikes
-        ]
 
         return (
+            f"전체 구간 평균 채팅 수: {average:.2f}\n"
+            f"채팅 급증 기준: 평균의 "
+            f"{CHAT_SPIKE_THRESHOLD:.1f}배 이상\n\n"
             "채팅 급증 구간:\n"
-            + "\n".join(lines)
+            + "\n".join(spike_lines)
         )
 
     raise ValueError(
-        f"알 수 없는 mode: {mode} "
-        "(full 또는 spike만 지원)"
+        f"지원하지 않는 chat summary mode입니다: {mode}"
     )
 
 
 # --------------------------------------------------
-# 3. LLM 분석 실행
+# LLM
 # --------------------------------------------------
 
 def run_llm_analysis(
@@ -266,48 +271,16 @@ def run_llm_analysis(
     duration_sec: Optional[float] = None,
 ) -> str:
     """
-    자막, 채팅 통계, 방송 길이를 프롬프트에 삽입하여
-    LLM에 분석을 요청한다.
-
-    LLM 분석 규칙은 모두 prompts/prompt.txt에서 관리한다.
+    자막과 채팅 데이터를 Gemini에 전달해 분석한다.
     """
 
-    client = get_llm_client()
-
-    prompt_template = load_prompt()
-
-    # 방송 길이
-    if duration_sec and duration_sec > 0:
-        duration_min = round(
-            duration_sec / 60,
-            1
-        )
-    else:
-        duration_min = "알 수 없음"
-
-    # 채팅 데이터가 없는 경우에도
-    # 프롬프트의 해당 영역이 자연스럽게 유지되도록 한다.
-    if chat_summary_text:
-        chat_section = chat_summary_text
-    else:
-        chat_section = (
-            "채팅 데이터가 제공되지 않았습니다. "
-            "자막과 문맥만을 기준으로 분석하십시오."
-        )
-
-    # prompt.txt의 변수에 실제 데이터를 삽입
-    prompt = prompt_template.format(
+    prompt = build_prompt(
         subtitle_text=subtitle_text,
-        chat_section=chat_section,
-        chat_spike_threshold=CHAT_SPIKE_THRESHOLD,
-        duration_min=duration_min,
-        max_event_interval_sec=MAX_EVENT_INTERVAL_SEC,
+        chat_section=chat_summary_text,
+        duration_sec=duration_sec,
     )
 
-    print(
-        f"\n{MODEL_NAME} 모델이 "
-        f"자막을 분석 중입니다..."
-    )
+    client = get_llm_client()
 
     response = client.models.generate_content(
         model=MODEL_NAME,
@@ -318,17 +291,12 @@ def run_llm_analysis(
 
 
 # --------------------------------------------------
-# 4. 응답 파싱
+# 결과 파싱
 # --------------------------------------------------
 
-def parse_analysis_result(
-    raw_text: str
-) -> list[dict]:
+def parse_analysis_result(raw_text: str) -> list:
     """
-    LLM 원본 응답 텍스트를 JSON 배열로 파싱한다.
-
-    코드블록이나 JSON 앞뒤의 불필요한 텍스트가
-    포함된 경우에도 최대한 파싱을 시도한다.
+    LLM 응답에서 JSON 배열을 추출한다.
     """
 
     text = raw_text.strip()
@@ -337,175 +305,166 @@ def parse_analysis_result(
     text = re.sub(
         r"^```(?:json)?\s*",
         "",
-        text
+        text,
+        flags=re.IGNORECASE,
     )
 
     text = re.sub(
         r"\s*```$",
         "",
-        text
+        text,
     )
 
-    # JSON 배열의 시작과 끝 탐색
+    # JSON 배열 시작/끝 찾기
     start = text.find("[")
     end = text.rfind("]")
 
-    if start == -1 or end == -1:
+    if start == -1 or end == -1 or end <= start:
         raise ValueError(
-            "응답에서 JSON 배열을 찾을 수 없습니다:\n"
-            f"{raw_text}"
+            "LLM 응답에서 JSON 배열을 찾을 수 없습니다."
         )
 
-    json_text = text[
-        start:end + 1
-    ]
+    json_text = text[start:end + 1]
 
     try:
-        result = json.loads(
-            json_text
-        )
+        result = json.loads(json_text)
 
     except json.JSONDecodeError as e:
         raise ValueError(
-            f"JSON 파싱에 실패했습니다: {e}\n"
-            f"원본 텍스트:\n{raw_text}"
-        )
+            f"LLM 응답 JSON 파싱 실패: {e}\n\n"
+            f"응답 내용:\n{raw_text}"
+        ) from e
 
     if not isinstance(result, list):
         raise ValueError(
-            "LLM 응답 JSON이 배열 형식이 아닙니다."
+            "LLM 결과가 JSON 배열이 아닙니다."
         )
 
     return result
 
 
 # --------------------------------------------------
-# 5. 결과 저장
+# 저장
 # --------------------------------------------------
 
 def save_analysis(
     audio_name: str,
-    results: list[dict]
+    results: list,
 ) -> Path:
     """
-    분석 결과를 JSON으로 저장하고
-    저장 경로를 반환한다.
+    분석 결과를 JSON으로 저장한다.
     """
 
-    os.makedirs(
-        OUTPUT_DIR,
-        exist_ok=True
+    output_dir = Path(OUTPUT_DIR)
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
     )
 
-    payload = {
+    output_path = (
+        output_dir
+        / f"{audio_name}_analysis.json"
+    )
+
+    data = {
         "audio_source": audio_name,
         "model": MODEL_NAME,
         "num_points": len(results),
         "highlights": results,
     }
 
-    out_path = (
-        Path(OUTPUT_DIR)
-        / f"{audio_name}_analysis.json"
-    )
-
-    with open(
-        out_path,
-        "w",
-        encoding="utf-8"
-    ) as f:
-
-        json.dump(
-            payload,
-            f,
+    output_path.write_text(
+        json.dumps(
+            data,
             ensure_ascii=False,
-            indent=2
-        )
-
-    print(
-        f"[저장 완료] {out_path}"
+            indent=2,
+        ),
+        encoding="utf-8",
     )
 
-    return out_path
+    return output_path
 
 
 # --------------------------------------------------
-# 6. 전체 분석
+# 전체 분석
 # --------------------------------------------------
 
 def analyze_subtitle(
-    subtitle_path: Optional[str] = None,
-    chat_data_path: Optional[str] = None,
-    chat_summary_mode: str = "spike",
-) -> Path:
+    subtitle_path=None,
+    chat_data_path=None,
+    chat_summary_mode="spike",
+):
     """
-    자막 파일을 읽어 LLM 분석 결과를 JSON 파일로 저장하고
-    그 경로를 반환한다.
+    자막 + 선택적 채팅 데이터를 분석한다.
 
-    Parameters
-    ----------
     subtitle_path:
-        자막 파일 경로.
-        지정하지 않으면 input()으로 받는다.
+        전사 JSON 파일 경로
 
     chat_data_path:
-        채팅 통계 CSV 경로.
-        지정하지 않으면 자막만 분석한다.
+        채팅 통계 CSV 경로
 
     chat_summary_mode:
-        "spike" = 채팅 급증 구간만 전달
-        "full"  = 전체 채팅 수치 전달
+        "spike" 또는 "full"
     """
+
+    # ----------------------------------------------
+    # 자막 경로
+    # ----------------------------------------------
 
     if subtitle_path is None:
         subtitle_path = input(
-            "자막 파일 경로: "
+            "자막 JSON 파일 경로를 입력하세요: "
         ).strip()
 
-    subtitle_path = Path(
-        subtitle_path
-    )
+    subtitle_path = Path(subtitle_path)
 
-    audio_name = subtitle_path.stem
+    if not subtitle_path.exists():
+        raise FileNotFoundError(
+            f"자막 파일을 찾을 수 없습니다: {subtitle_path}"
+        )
 
-    # --------------------------------------------------
-    # 자막 로드
-    # --------------------------------------------------
+    # ----------------------------------------------
+    # 자막 읽기
+    # ----------------------------------------------
 
     subtitle_text = load_subtitle(
         subtitle_path
     )
 
-    # --------------------------------------------------
-    # 방송 길이 계산
-    # --------------------------------------------------
-
     duration_sec = get_subtitle_duration(
         subtitle_text
     )
 
-    # --------------------------------------------------
-    # 채팅 데이터
-    # --------------------------------------------------
+    # ----------------------------------------------
+    # 채팅
+    # ----------------------------------------------
 
     chat_summary_text = ""
 
     if chat_data_path is not None:
 
-        buckets = load_chat_data(
-            Path(chat_data_path)
+        chat_data_path = Path(
+            chat_data_path
         )
 
-        chat_summary_text = (
-            build_chat_summary_text(
-                buckets,
-                mode=chat_summary_mode
+        if not chat_data_path.exists():
+            raise FileNotFoundError(
+                f"채팅 파일을 찾을 수 없습니다: "
+                f"{chat_data_path}"
             )
+
+        chat_buckets = load_chat_data(
+            chat_data_path
         )
 
-    # --------------------------------------------------
+        chat_summary_text = build_chat_summary_text(
+            chat_buckets,
+            mode=chat_summary_mode,
+        )
+
+    # ----------------------------------------------
     # LLM 분석
-    # --------------------------------------------------
+    # ----------------------------------------------
 
     raw_result = run_llm_analysis(
         subtitle_text=subtitle_text,
@@ -513,32 +472,35 @@ def analyze_subtitle(
         duration_sec=duration_sec,
     )
 
-    # --------------------------------------------------
-    # JSON 파싱
-    # --------------------------------------------------
+    # ----------------------------------------------
+    # 결과 파싱
+    # ----------------------------------------------
 
-    parsed_result = parse_analysis_result(
+    results = parse_analysis_result(
         raw_result
     )
 
-    # --------------------------------------------------
-    # 결과 저장
-    # --------------------------------------------------
+    # ----------------------------------------------
+    # 저장
+    # ----------------------------------------------
 
-    return save_analysis(
-        audio_name,
-        parsed_result
+    audio_name = subtitle_path.stem
+
+    output_path = save_analysis(
+        audio_name=audio_name,
+        results=results,
     )
+
+    print(
+        f"분석 완료: {output_path}"
+    )
+
+    return output_path
 
 
 # --------------------------------------------------
-# 실행
+# CLI
 # --------------------------------------------------
 
 if __name__ == "__main__":
-
-    result_path = analyze_subtitle()
-
-    print(
-        f"\n분석 결과 저장 위치: {result_path}"
-    )
+    analyze_subtitle()
