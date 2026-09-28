@@ -22,4 +22,7 @@ __all__ = [
     "json_to_csv",
     "count_file_tokens",
     "get_llm_client",
+    "download_file",
+    "upload",
+    "exits"
 ]
