@@ -4,7 +4,7 @@ Google Drive API 최소 인터페이스
 
 Public
 ------
-download(drive_path, local_path=None) -> str
+download_file(drive_path, local_path=None) -> str
 upload(local_path, drive_path) -> str
 exists(drive_path) -> bool
 """
@@ -140,7 +140,7 @@ def exists(drive_path: str) -> bool:
     return _resolve_path(drive_path) is not None
 
 
-def download(drive_path: str, local_path: str | None = None) -> str:
+def download_file(drive_path: str, local_path: str | None = None) -> str:
     """
     Drive -> Local
 
