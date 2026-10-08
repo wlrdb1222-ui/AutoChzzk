@@ -181,15 +181,6 @@ def _expand_segment_template(adaptation: dict, representation: dict) -> list[Seg
             number += 1
 
     return segments
-def convert_to_mp3(mp4_path: str) -> str:
-    mp3_path = Path(mp4_path).with_suffix(".mp3")
-
-    subprocess.run(
-        ["ffmpeg", "-y", "-i", str(mp4_path), "-vn", "-acodec", "libmp3lame", "-q:a", "2", str(mp3_path)],
-        check=True,
-    )
-
-    return str(mp3_path)
 
 def _fill_template(template: str, representation_id: str, number: int, ticks: int) -> str:
     """미디어 템플릿의 $RepresentationID$, $Number$, $Time$ 변수를 치환한다."""
