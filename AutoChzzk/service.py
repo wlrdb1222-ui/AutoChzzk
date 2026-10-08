@@ -227,7 +227,7 @@ def extract_qualities(items: list[dict]) -> list[str]:
 
 def service():
 
-    video_no = "video_no 입력"
+    video_no = input("video_no 입력:")
     url = f"https://api.chzzk.naver.com/service/v2/videos/{video_no}"
     res = requests.get(url, headers=headers)
     data = res.json()
