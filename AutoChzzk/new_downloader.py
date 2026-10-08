@@ -26,20 +26,44 @@ def download_mp4(url: str, output_path: str | Path) -> Path:
         f"--split={connections}",
         f"--max-tries={retries}",
         "--summary-interval=1",
-        "--console-log-level=info",
-        "--show-console-readout=true",
+        "--console-log-level=warn",
+        "--show-console-readout=false",
+        "--human-readable=true",
         "--dir", str(output_path.parent),
         "--out", output_path.name,
         url,
     ]
 
-    result = subprocess.run(command)
+    proc = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
 
-    if result.returncode != 0:
-        raise RuntimeError(f"MP4 download failed: aria2c exited with code {result.returncode}")
-    if not output_path.exists():
-        raise RuntimeError(f"Download finished but file was not found: {output_path}")
+    in_progress = False
+    for raw in proc.stdout:
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("[#"):
+            print("\r" + line.ljust(100), end="", flush=True)
+            in_progress = True
+            continue
+        if line.startswith(("***", "===", "FILE:", "---")):
+            continue
+        if in_progress:
+            print()
+            in_progress = False
+        print(line, flush=True)
 
+    proc.wait()
+    if in_progress:
+        print()
+
+     if proc.returncode != 0:
+        raise RuntimeError(f"MP4 download failed: aria2c exited with code {proc.returncode}")
     return output_path
 
 def download_segments(segments: list[str], output_path: str | Path, connections: int = DEFAULT_CONNECTIONS, retries: int = DEFAULT_RETRIES) -> Path:
