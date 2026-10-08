@@ -3,8 +3,8 @@
 import requests
 import json
 import re
-from .new_downloader.py import download_mp4,download_segments,convert_to_mp3
-from .segment_maker.py import make_segments_from_mpd,make_segments_from_m3u8,SegmentInfo
+from .new_downloader import download_mp4,download_segments,convert_to_mp3
+from .segment_maker import make_segments_from_mpd,make_segments_from_m3u8,SegmentInfo
 
 
 
