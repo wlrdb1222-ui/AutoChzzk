@@ -2,6 +2,8 @@
 from pathlib import Path
 import subprocess
 import re
+from .segment_maker import SegmentInfo 
+
 from tqdm.auto import tqdm
 DEFAULT_CONNECTIONS = 16
 DEFAULT_RETRIES = 5
@@ -211,3 +213,12 @@ def _run_aria2c(command: list[str], total_files: int | None = None) -> int:
         print("\n".join(log_tail))
 
     return returncode
+def convert_to_mp3(mp4_path: str) -> str:
+    mp3_path = Path(mp4_path).with_suffix(".mp3")
+
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", str(mp4_path), "-vn", "-acodec", "libmp3lame", "-q:a", "2", str(mp3_path)],
+        check=True,
+    )
+
+    return str(mp3_path)
