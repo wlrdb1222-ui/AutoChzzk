@@ -195,21 +195,21 @@ def process_selection(selection: dict) -> str:
     print("process")
     match type_:
         case "audio":
-            return download_mp4(url, title)
+            return download_mp4(url, title+".mp3")
 
         case "audio_hls":
-            return convert_to_mp3(download_mp4(url, title))
+            return download_mp4(url, title+."mp3")
 
         case "audio_m3u8":
-            return convert_to_mp3(download_segments(make_segments_from_m3u8(url, quality), title))
+            return download_segments(make_segments_from_m3u8(url, quality), title+".mp3")
 
         case "hls":
             if start is None and end is None:
-                return download_mp4(url, title)
-            return download_segments(make_segments_from_mpd(url, quality, start, end), title)
+                return download_mp4(url, title+".mp4")
+            return download_segments(make_segments_from_mpd(url, quality, start, end), title+".mp4")
 
         case "m3u8":
-            return download_segments(make_segments_from_m3u8(url, quality, start, end), title)
+            return download_segments(make_segments_from_m3u8(url, quality, start, end), title+".mp4")
 
         case _:
             raise ValueError(f"알 수 없는 type: {type_}")
