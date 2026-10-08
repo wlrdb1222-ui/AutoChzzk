@@ -9,7 +9,6 @@ DEFAULT_CONNECTIONS = 16
 DEFAULT_RETRIES = 5
 CHUNK_SIZE = 1024 * 1024
 
-
 def download_mp4(url: str, output_path: str | Path) -> Path:
     """MP4 파일을 URL에서 다운로드한다."""
     print("downloading")
@@ -26,9 +25,9 @@ def download_mp4(url: str, output_path: str | Path) -> Path:
         f"--split={connections}",
         f"--max-tries={retries}",
         "--summary-interval=1",
+        "--human-readable=true",
         "--console-log-level=warn",
         "--show-console-readout=false",
-        "--human-readable=true",
         "--dir", str(output_path.parent),
         "--out", output_path.name,
         url,
@@ -62,8 +61,11 @@ def download_mp4(url: str, output_path: str | Path) -> Path:
     if in_progress:
         print()
 
-     if proc.returncode != 0:
+    if proc.returncode != 0:
         raise RuntimeError(f"MP4 download failed: aria2c exited with code {proc.returncode}")
+    if not output_path.exists():
+        raise RuntimeError(f"Download finished but file was not found: {output_path}")
+
     return output_path
 
 def download_segments(segments: list[str], output_path: str | Path, connections: int = DEFAULT_CONNECTIONS, retries: int = DEFAULT_RETRIES) -> Path:
