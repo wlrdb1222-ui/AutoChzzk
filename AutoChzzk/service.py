@@ -198,7 +198,7 @@ def process_selection(selection: dict) -> str:
             return download_mp4(url, title+".mp3")
 
         case "audio_hls":
-            return download_mp4(url, title+."mp3")
+            return download_mp4(url, title+".mp3")
 
         case "audio_m3u8":
             return download_segments(make_segments_from_m3u8(url, quality), title+".mp3")
