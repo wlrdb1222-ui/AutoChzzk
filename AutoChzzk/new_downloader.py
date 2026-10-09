@@ -26,45 +26,18 @@ def download_mp4(url: str, output_path: str | Path) -> Path:
         f"--max-tries={retries}",
         "--summary-interval=1",
         "--human-readable=true",
-        "--console-log-level=warn",
+        "--console-log-level=notice",
         "--show-console-readout=false",
+        "--download-result=hide",
         "--dir", str(output_path.parent),
         "--out", output_path.name,
         url,
     ]
 
-    proc = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
+    returncode = _run_aria2c(command,total_segments=len(segments))
 
-    in_progress = False
-    for raw in proc.stdout:
-        line = raw.strip()
-        if not line:
-            continue
-        if line.startswith("[#"):
-            print("\r" + line.ljust(100), end="", flush=True)
-            in_progress = True
-            continue
-        if line.startswith(("***", "===", "FILE:", "---")):
-            continue
-        if in_progress:
-            print()
-            in_progress = False
-        print(line, flush=True)
-
-    proc.wait()
-    if in_progress:
-        print()
-
-    if proc.returncode != 0:
-        raise RuntimeError(f"MP4 download failed: aria2c exited with code {proc.returncode}")
-    if not output_path.exists():
-        raise RuntimeError(f"Download finished but file was not found: {output_path}")
+    if returncode != 0:
+        raise RuntimeError(f"MP4 download failed: aria2c exited with code {returncode}")
 
     return output_path
 
@@ -93,8 +66,9 @@ def download_segments(segments: list[str], output_path: str | Path, connections:
             f"--max-concurrent-downloads={connections}",
             f"--max-tries={retries}",
             "--summary-interval=1",
+            "--human-readable=true",
             "--console-log-level=notice",
-            "--show-console-readout=true",
+            "--show-console-readout=false",
             "--download-result=hide",
             "--dir", str(segment_dir),
             "--input-file", str(input_file),
@@ -103,15 +77,10 @@ def download_segments(segments: list[str], output_path: str | Path, connections:
         print(f"세그먼트 다운로드 시작: {len(segments)}개")
         print(f"병렬 다운로드: {connections}개")
 
-        result = subprocess.run(command)
+        returncode = _run_aria2c(command, total_segments=len(segments))
 
-        if result.returncode != 0:
-            raise RuntimeError(f"Segment download failed: aria2c exited with code {result.returncode}")
-
-        missing = [path for path in segment_paths if not path.exists()]
-
-        if missing:
-            raise RuntimeError(f"Missing downloaded segments: {missing[:3]}")
+        if returncode != 0:
+            raise RuntimeError(f"Segment download failed: aria2c exited with code {returncode}")
 
         print("세그먼트 다운로드 완료")
         print("세그먼트 병합 중...")
@@ -177,14 +146,34 @@ def _merge_segments(segment_paths: list[Path], output_path: Path) -> None:
                     output_file.write(chunk)
 PERCENT_PATTERN = re.compile(r"\((\d+)%\)")
 SPEED_PATTERN = re.compile(r"DL:(\S+?)[\s\]]")
+_SIZE_UNITS = {"B": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3}
+_SINGLE_RE = re.compile(
+    r"\[#\w+ (\S+?)/(\S+?)\((\d+)%\).*?DL:(\S+?)(?: ETA:(\S+?))?\]"
+)
+_SPEED_RE = re.compile(r"DL:([\d.]+)(GiB|MiB|KiB|B)")
 
 
-def _run_aria2c(command: list[str], total_files: int | None = None) -> int:
-    """aria2c를 실행하며 진행률을 표시하고 종료 코드를 반환한다.
+def _bar(ratio: float, width: int = 30) -> str:
+    ratio = max(0.0, min(1.0, ratio))
+    filled = int(width * ratio)
+    return "█" * filled + "░" * (width - filled)
 
-    total_files가 있으면 완료된 파일 수로, 없으면 출력의 퍼센트 값으로 진행률을 갱신한다.
+
+def _total_speed(line: str) -> str:
+    """요약 줄에 있는 모든 DL 값을 합산해서 보기 좋게 반환."""
+    total = sum(float(v) * _SIZE_UNITS[u] for v, u in _SPEED_RE.findall(line))
+    if total >= 1024**2:
+        return f"{total / 1024**2:.1f}MiB/s"
+    return f"{total / 1024:.0f}KiB/s"
+
+
+def _run_aria2c(command: list[str], total_segments: int | None = None) -> int:
+    """aria2c를 실행하고 진행 바를 그린다.
+
+    total_segments가 None이면 단일 파일(퍼센트 기준),
+    값이 있으면 세그먼트 완료 개수 기준으로 바를 그린다.
     """
-    process = subprocess.Popen(
+    proc = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -192,54 +181,115 @@ def _run_aria2c(command: list[str], total_files: int | None = None) -> int:
         bufsize=1,
     )
 
-    if total_files:
-        bar = tqdm(total=total_files, unit="seg", desc="세그먼트")
-    else:
-        bar = tqdm(
-            total=100,
-            desc="다운로드",
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}% [{elapsed}<{remaining}]{postfix}",
-        )
+    done = 0
+    in_progress = False
 
-    log_tail: list[str] = []
+    def draw(text: str) -> None:
+        nonlocal in_progress
+        print("\r" + text.ljust(100), end="", flush=True)
+        in_progress = True
 
-    try:
-        for line in process.stdout:
-            line = line.strip()
+    for raw in proc.stdout:
+        line = raw.strip()
+        if not line:
+            continue
 
-            if not line:
-                continue
+        # 세그먼트 모드: 완료 알림 개수를 센다
+        if total_segments is not None and "Download complete" in line:
+            done += 1
+            draw(f"{_bar(done / total_segments)} {done}/{total_segments}")
+            continue
 
-            log_tail = (log_tail + [line])[-20:]
+        if line.startswith("[#"):
+            if total_segments is None:
+                m = _SINGLE_RE.search(line)
+                if m:
+                    cur, total, pct, speed, eta = m.groups()
+                    draw(
+                        f"{_bar(int(pct) / 100)} {pct}% "
+                        f"{cur}/{total} {speed}/s ETA:{eta or '-'}"
+                    )
+            else:
+                draw(
+                    f"{_bar(done / total_segments)} {done}/{total_segments} "
+                    f"{_total_speed(line)}"
+                )
+            continue
 
-            if total_files:
-                if "Download complete" in line:
-                    bar.update(1)
-                continue
+        if line.startswith(("***", "===", "FILE:", "---")):
+            continue
 
-            percent = PERCENT_PATTERN.search(line)
+        if in_progress:
+            print()
+            in_progress = False
+        print(line, flush=True)
 
-            if percent:
-                bar.n = int(percent.group(1))
-                bar.refresh()
+    proc.wait()
+    if in_progress:
+        print()
+    return proc.returncode
 
-            speed = SPEED_PATTERN.search(line)
+# def _run_aria2c(command: list[str], total_files: int | None = None) -> int:
+#     """aria2c를 실행하며 진행률을 표시하고 종료 코드를 반환한다.
 
-            if speed:
-                bar.set_postfix_str(f"{speed.group(1)}/s")
+#     total_files가 있으면 완료된 파일 수로, 없으면 출력의 퍼센트 값으로 진행률을 갱신한다.
+#     """
+#     process = subprocess.Popen(
+#         command,
+#         stdout=subprocess.PIPE,
+#         stderr=subprocess.STDOUT,
+#         text=True,
+#         bufsize=1,
+#     )
 
-        returncode = process.wait()
+#     if total_files:
+#         bar = tqdm(total=total_files, unit="seg", desc="세그먼트")
+#     else:
+#         bar = tqdm(
+#             total=100,
+#             desc="다운로드",
+#             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}% [{elapsed}<{remaining}]{postfix}",
+#         )
 
-        if returncode == 0:
-            bar.n = bar.total
-            bar.refresh()
-    finally:
-        bar.close()
+#     log_tail: list[str] = []
 
-    if returncode != 0:
-        print("\n".join(log_tail))
+#     try:
+#         for line in process.stdout:
+#             line = line.strip()
 
-    return returncode
+#             if not line:
+#                 continue
+
+#             log_tail = (log_tail + [line])[-20:]
+
+#             if total_files:
+#                 if "Download complete" in line:
+#                     bar.update(1)
+#                 continue
+
+#             percent = PERCENT_PATTERN.search(line)
+
+#             if percent:
+#                 bar.n = int(percent.group(1))
+#                 bar.refresh()
+
+#             speed = SPEED_PATTERN.search(line)
+
+#             if speed:
+#                 bar.set_postfix_str(f"{speed.group(1)}/s")
+
+#         returncode = process.wait()
+
+#         if returncode == 0:
+#             bar.n = bar.total
+#             bar.refresh()
+#     finally:
+#         bar.close()
+
+#     if returncode != 0:
+#         print("\n".join(log_tail))
+
+#     return returncode
 def convert_to_mp3(mp4_path: str) -> str:
     mp3_path = Path(mp4_path).with_suffix(".mp3")
 
