@@ -135,11 +135,22 @@ def run_transcription(
     """오디오를 전사하고 (구간 리스트, 소요시간)을 반환한다."""
     t0 = time.time()
 
-    segments, elapsed = run_transcription_chunked(
-        model, audio_path, "/content/chunks", initial_prompt
+    segments, info = model.transcribe(
+        str(audio_path),
+        language=LANGUAGE,
+        initial_prompt=initial_prompt,
+        condition_on_previous_text=False,
+        beam_size=5,
+        temperature=0.0,
+        vad_filter=True,
+        vad_parameters=dict(
+            min_silence_duration_ms=250,
+            speech_pad_ms=200,
+            max_speech_duration_s=15,
+        ),
+        word_timestamps=False,
     )
-    eTime = time.time() - t0
-    print(f"[전처리 완료]{eTime:.1f}초")
+
     results = []
     with tqdm(total=round(info.duration, 1), unit="초", desc="전사 진행률") as pbar:
         last_end = 0.0
@@ -155,7 +166,6 @@ def run_transcription(
     elapsed = time.time() - t0
     print(f"[전사 완료] {len(results)}개 구간 - {elapsed:.1f}초")
     return results, elapsed
-
 # --------------------------------------------------
 # 3. 결과 저장
 # --------------------------------------------------
