@@ -34,7 +34,7 @@ def download_mp4(url: str, output_path: str | Path) -> Path:
         url,
     ]
 
-    returncode = _run_aria2c(command,total_segments=len(segments))
+    returncode = _run_aria2c(command)
 
     if returncode != 0:
         raise RuntimeError(f"MP4 download failed: aria2c exited with code {returncode}")
