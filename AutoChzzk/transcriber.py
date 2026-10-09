@@ -71,7 +71,7 @@ def run_transcription(
             max_speech_duration_s=15,
         ),
 
-        word_timestamps=False,
+        word_timestamps=true,
     )
     eTime = time.time() - t0
     print(f"[전처리 완료]{eTime:.1f}초")
