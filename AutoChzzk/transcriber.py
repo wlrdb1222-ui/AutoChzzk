@@ -46,6 +46,85 @@ def load_model() -> WhisperModel:
 # 2. 전사 실행
 # --------------------------------------------------
 
+MAX_CHUNK_SEC = 1800   # 조각 최대 길이 (30분)
+PRE_PAD_SEC = 10       # 조각 앞쪽 문맥용 여유
+POST_PAD_SEC = 20      # 조각 뒤쪽 여유 (VAD 최대 구간 15초보다 크게)
+
+
+def get_duration(path: Path) -> float:
+    out = subprocess.check_output([
+        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1", str(path),
+    ])
+    return float(out.decode().strip())
+
+
+def cut_chunk(src: Path, dst: Path, start: float, length: float):
+    """구간을 잘라 16kHz mono wav로 저장"""
+    subprocess.run([
+        "ffmpeg", "-y", "-v", "error",
+        "-ss", f"{start:.3f}", "-t", f"{length:.3f}",
+        "-i", str(src), "-vn", "-ac", "1", "-ar", "16000", str(dst),
+    ], check=True)
+
+
+def run_transcription_chunked(
+    model,
+    audio_path: Path,
+    work_dir: Path,
+    initial_prompt=None,
+):
+    audio_path, work_dir = Path(audio_path), Path(work_dir)
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    duration = get_duration(audio_path)
+    n = max(1, math.ceil(duration / MAX_CHUNK_SEC))
+    chunk_len = duration / n          # 균등 분할
+    print(f"[분할] 총 {duration/60:.1f}분 -> {n}개 조각 (조각당 약 {chunk_len/60:.1f}분)")
+
+    all_segments, total_elapsed = [], 0.0
+
+    for i in range(n):
+        core_start = i * chunk_len
+        core_end = duration if i == n - 1 else (i + 1) * chunk_len
+        is_last = (i == n - 1)
+
+        cache = work_dir / f"chunk_{i:03d}.json"
+        if cache.exists():                      # 이어하기
+            kept = json.loads(cache.read_text(encoding="utf-8"))
+            print(f"[{i+1}/{n}] 캐시 사용")
+            all_segments.extend(kept)
+            continue
+
+        # 실제로 자르는 범위 = 담당 구간 + 앞뒤 여유
+        cut_start = max(0.0, core_start - PRE_PAD_SEC)
+        cut_end = min(duration, core_end + POST_PAD_SEC)
+        wav = work_dir / f"chunk_{i:03d}.wav"
+        cut_chunk(audio_path, wav, cut_start, cut_end - cut_start)
+
+        print(f"[{i+1}/{n}] {core_start/60:.1f}~{core_end/60:.1f}분 전사 중")
+        segs, elapsed = run_transcription(model, wav, initial_prompt)
+        total_elapsed += elapsed
+        wav.unlink(missing_ok=True)
+
+        # 전체 타임라인으로 변환 후, "시작 시각이 담당 구간 안인 것"만 채택
+        kept = []
+        for s in segs:
+            g_start = s["start"] + cut_start
+            g_end = s["end"] + cut_start
+            if core_start <= g_start < core_end or (is_last and g_start >= core_start):
+                kept.append({
+                    "start": round(g_start, 2),
+                    "end": round(g_end, 2),
+                    "text": s["text"],
+                })
+
+        cache.write_text(json.dumps(kept, ensure_ascii=False), encoding="utf-8")
+        all_segments.extend(kept)
+
+    all_segments.sort(key=lambda x: x["start"])
+    print(f"[전체 완료] {len(all_segments)}개 구간 - 전사 합계 {total_elapsed:.1f}초")
+    return all_segments, total_elapsed
 def run_transcription(
     model: WhisperModel,
     audio_path: Path,
@@ -54,24 +133,8 @@ def run_transcription(
     """오디오를 전사하고 (구간 리스트, 소요시간)을 반환한다."""
     t0 = time.time()
 
-    segments, info = model.transcribe(
-        str(audio_path),
-        language=LANGUAGE,
-        initial_prompt=initial_prompt,
-
-        condition_on_previous_text=False,
-
-        beam_size=5,
-        temperature=0.0,
-
-        vad_filter=True,
-        vad_parameters=dict(
-            min_silence_duration_ms=250,
-            speech_pad_ms=200,
-            max_speech_duration_s=15,
-        ),
-
-        word_timestamps=False,
+    segments, elapsed = run_transcription_chunked(
+        model, audio_path, "/content/chunks", initial_prompt
     )
     eTime = time.time() - t0
     print(f"[전처리 완료]{eTime:.1f}초")
