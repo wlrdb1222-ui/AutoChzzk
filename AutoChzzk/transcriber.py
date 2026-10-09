@@ -61,7 +61,7 @@ def run_transcription(
 
         condition_on_previous_text=False,
 
-        beam_size=10,
+        beam_size=5,
         temperature=0.0,
 
         vad_filter=True,
@@ -71,7 +71,7 @@ def run_transcription(
             max_speech_duration_s=15,
         ),
 
-        word_timestamps=True,
+        word_timestamps=False,
     )
     eTime = time.time() - t0
     print(f"[전처리 완료]{eTime:.1f}초")
