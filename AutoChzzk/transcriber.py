@@ -73,7 +73,6 @@ def run_transcription(
 
         word_timestamps=False,
     )
-    t_transcribe = time.tim()
     eTime = time.time() - t0
     print(f"[전처리 완료]{eTime:.1f}초")
     results = []
