@@ -6,6 +6,8 @@ faster-whisper 기반 오디오 전사 모듈.
 import os
 import time
 import json
+import math
+import subprocess
 from pathlib import Path
 from typing import Optional
 
