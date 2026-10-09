@@ -71,9 +71,11 @@ def run_transcription(
             max_speech_duration_s=15,
         ),
 
-        word_timestamps=True,
+        word_timestamps=False,
     )
-
+    t_transcribe = time.tim()
+    eTime = time.time() - t0
+    print(f"[전처리 완료]{eTime:.1f}초")
     results = []
     with tqdm(total=round(info.duration, 1), unit="초", desc="전사 진행률") as pbar:
         last_end = 0.0
