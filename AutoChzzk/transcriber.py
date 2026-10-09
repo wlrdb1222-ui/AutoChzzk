@@ -220,7 +220,9 @@ def transcribe_audio(
     print(f"입력된 파일: {audio_name}")
 
     model = load_model()
-    segments, elapsed_sec = run_transcription(model, audio_path, initial_prompt)
+    segments, elapsed_sec = run_transcription_chunked(
+        model, audio_path, "/content/chunks", initial_prompt
+    )
 
     return save_result(audio_name, segments, elapsed_sec)
 
