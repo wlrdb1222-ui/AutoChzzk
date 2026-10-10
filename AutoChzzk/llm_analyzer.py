@@ -490,11 +490,11 @@ def analyze_subtitle(
         duration_sec=duration_sec,
     )
     
-    # raw_result = run_llm_analysis(
-    #     subtitle_text=subtitle_text,
-    #     chat_summary_text=chat_summary_text,
-    #     duration_sec=duration_sec,
-    # )
+    raw_result = run_llm_analysis(
+        subtitle_text=subtitle_text,
+        chat_summary_text=chat_summary_text,
+        duration_sec=duration_sec,
+    )
 
     # ----------------------------------------------
     # 결과 파싱
