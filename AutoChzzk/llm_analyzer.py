@@ -288,7 +288,26 @@ def run_llm_analysis(
     )
 
     return response.text
-
+def count_llm_token(
+    subtitle_text: str,
+    chat_summary_text: str = "",
+    duration_sec: Optional[float] = None,
+) -> str:
+    
+    prompt = build_prompt(
+        subtitle_text=subtitle_text,
+        chat_section=chat_summary_text,
+        duration_sec=duration_sec,
+    )
+    
+    client = get_llm_client()
+    
+    token_count = client.models.count_tokens(
+        model=MODEL_NAME,
+        contents=prompt,
+    ).total_tokens
+    
+    print(f"입력 토큰 수: {token_count:,}")
 
 # --------------------------------------------------
 # 결과 파싱
@@ -465,12 +484,17 @@ def analyze_subtitle(
     # ----------------------------------------------
     # LLM 분석
     # ----------------------------------------------
-
-    raw_result = run_llm_analysis(
+    count_llm_analysis(
         subtitle_text=subtitle_text,
         chat_summary_text=chat_summary_text,
         duration_sec=duration_sec,
     )
+    
+    # raw_result = run_llm_analysis(
+    #     subtitle_text=subtitle_text,
+    #     chat_summary_text=chat_summary_text,
+    #     duration_sec=duration_sec,
+    # )
 
     # ----------------------------------------------
     # 결과 파싱
