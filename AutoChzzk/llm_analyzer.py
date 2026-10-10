@@ -52,29 +52,47 @@ def load_prompt() -> str:
     return PROMPT_PATH.read_text(encoding="utf-8")
 
 
-def build_prompt(
-    subtitle_text: str,
-    chat_section: str = "",
-    duration_sec: Optional[float] = None,
-) -> str:
-    """
-    prompt.txt에 필요한 값을 삽입한다.
+# def build_prompt(
+#     subtitle_text: str,
+#     chat_section: str = "",
+#     duration_sec: Optional[float] = None,
+# ) -> str:
+#     """
+#     prompt.txt에 필요한 값을 삽입한다.
 
-    str.format()을 사용하지 않는 이유:
-    prompt.txt 안에 JSON 예시처럼 중괄호가 포함될 수 있기 때문이다.
+#     str.format()을 사용하지 않는 이유:
+#     prompt.txt 안에 JSON 예시처럼 중괄호가 포함될 수 있기 때문이다.
 
-    따라서 실제로 사용하는 변수만 명시적으로 치환한다.
-    """
+#     따라서 실제로 사용하는 변수만 명시적으로 치환한다.
+#     """
+
+#     prompt = load_prompt()
+
+#     duration_min = 0
+
+#     if duration_sec is not None:
+#         duration_min = duration_sec / 60
+
+#     replacements = {
+#         "{subtitle_text}": subtitle_text,
+#         "{chat_section}": chat_section,
+#         "{chat_spike_threshold}": str(CHAT_SPIKE_THRESHOLD),
+#         "{duration_min}": f"{duration_min:.2f}",
+#         "{max_event_interval_sec}": str(MAX_EVENT_INTERVAL_SEC),
+#     }
+
+#     for placeholder, value in replacements.items():
+#         prompt = prompt.replace(placeholder, value)
+
+#     return prompt
+def build_prompt(subtitle_sections: str, chat_section: str = "", duration_sec: Optional[float] = None) -> str:
+    """prompt.txt에 필요한 값을 삽입한다."""
 
     prompt = load_prompt()
-
-    duration_min = 0
-
-    if duration_sec is not None:
-        duration_min = duration_sec / 60
+    duration_min = duration_sec / 60 if duration_sec is not None else 0
 
     replacements = {
-        "{subtitle_text}": subtitle_text,
+        "{subtitle_sections}": subtitle_sections,
         "{chat_section}": chat_section,
         "{chat_spike_threshold}": str(CHAT_SPIKE_THRESHOLD),
         "{duration_min}": f"{duration_min:.2f}",
@@ -86,7 +104,31 @@ def build_prompt(
 
     return prompt
 
+def build_subtitle_sections(json_paths: list[str]) -> str:
+    """여러 자막 JSON을 번호가 있는 분석 구간 문자열로 변환한다."""
 
+    sections = []
+
+    for index, json_path in enumerate(json_paths, 1):
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        start = data.get("chunk_start_sec", 0)
+        end = data.get("chunk_end_sec", start + data.get("audio_duration_sec", 0))
+        segments = data.get("segments", [])
+
+        subtitle_text = "\n".join(
+            f"[{segment['start']:.2f}~{segment['end']:.2f}] {segment['text']}"
+            for segment in segments
+        )
+
+        sections.append(
+            f"## 분석 구간 {index}\n"
+            f"핵심 분석 범위: {start:.2f} ~ {end:.2f}초\n\n"
+            f"{subtitle_text}"
+        )
+
+    return "\n\n".join(sections)
 # --------------------------------------------------
 # 자막
 # --------------------------------------------------
@@ -408,117 +450,45 @@ def save_analysis(
 # 전체 분석
 # --------------------------------------------------
 
-def analyze_subtitle(
-    subtitle_path=None,
-    chat_data_path=None,
-    chat_summary_mode="spike",
-):
-    """
-    자막 + 선택적 채팅 데이터를 분석한다.
 
-    subtitle_path:
-        전사 JSON 파일 경로
+def analyze_subtitle(subtitle_paths=None, chat_data_path=None, chat_summary_mode="spike"):
+    """여러 자막 JSON과 선택적 채팅 데이터를 분석한다."""
 
-    chat_data_path:
-        채팅 통계 CSV 경로
+    if subtitle_paths is None:
+        subtitle_paths = input("자막 JSON 파일 경로들을 쉼표로 구분해 입력하세요: ").strip().split(",")
+        subtitle_paths = [path.strip() for path in subtitle_paths if path.strip()]
 
-    chat_summary_mode:
-        "spike" 또는 "full"
-    """
+    subtitle_paths = [Path(path) for path in subtitle_paths]
 
-    # ----------------------------------------------
-    # 자막 경로
-    # ----------------------------------------------
+    if not subtitle_paths:
+        raise ValueError("자막 JSON 파일 경로가 입력되지 않았습니다.")
 
-    if subtitle_path is None:
-        subtitle_path = input(
-            "자막 JSON 파일 경로를 입력하세요: "
-        ).strip()
-
-    subtitle_path = Path(subtitle_path)
-
-    if not subtitle_path.exists():
-        raise FileNotFoundError(
-            f"자막 파일을 찾을 수 없습니다: {subtitle_path}"
-        )
-
-    # ----------------------------------------------
-    # 자막 읽기
-    # ----------------------------------------------
-
-    subtitle_text = load_subtitle(
-        subtitle_path
-    )
-
-    duration_sec = get_subtitle_duration(
-        subtitle_text
-    )
-
-    # ----------------------------------------------
-    # 채팅
-    # ----------------------------------------------
+    for subtitle_path in subtitle_paths:
+        if not subtitle_path.exists():
+            raise FileNotFoundError(f"자막 파일을 찾을 수 없습니다: {subtitle_path}")
 
     chat_summary_text = ""
 
     if chat_data_path is not None:
-
-        chat_data_path = Path(
-            chat_data_path
-        )
+        chat_data_path = Path(chat_data_path)
 
         if not chat_data_path.exists():
-            raise FileNotFoundError(
-                f"채팅 파일을 찾을 수 없습니다: "
-                f"{chat_data_path}"
-            )
+            raise FileNotFoundError(f"채팅 파일을 찾을 수 없습니다: {chat_data_path}")
 
-        chat_buckets = load_chat_data(
-            chat_data_path
-        )
+        chat_buckets = load_chat_data(chat_data_path)
+        chat_summary_text = build_chat_summary_text(chat_buckets, mode=chat_summary_mode)
 
-        chat_summary_text = build_chat_summary_text(
-            chat_buckets,
-            mode=chat_summary_mode,
-        )
+    subtitle_sections = build_subtitle_sections([str(path) for path in subtitle_paths])
+    duration_sec = sum(get_subtitle_duration(load_subtitle(path)) for path in subtitle_paths)
 
-    # ----------------------------------------------
-    # LLM 분석
-    # ----------------------------------------------
-    count_llm_token(
-        subtitle_text=subtitle_text,
-        chat_summary_text=chat_summary_text,
-        duration_sec=duration_sec,
-    )
-    
-    raw_result = run_llm_analysis(
-        subtitle_text=subtitle_text,
-        chat_summary_text=chat_summary_text,
-        duration_sec=duration_sec,
-    )
+    count_llm_token(subtitle_text=subtitle_sections, chat_summary_text=chat_summary_text, duration_sec=duration_sec)
+    raw_result = run_llm_analysis(subtitle_text=subtitle_sections, chat_summary_text=chat_summary_text, duration_sec=duration_sec)
 
-    # ----------------------------------------------
-    # 결과 파싱
-    # ----------------------------------------------
+    results = parse_analysis_result(raw_result)
+    audio_name = subtitle_paths[0].stem
+    output_path = save_analysis(audio_name=audio_name, results=results)
 
-    results = parse_analysis_result(
-        raw_result
-    )
-
-    # ----------------------------------------------
-    # 저장
-    # ----------------------------------------------
-
-    audio_name = subtitle_path.stem
-
-    output_path = save_analysis(
-        audio_name=audio_name,
-        results=results,
-    )
-
-    print(
-        f"분석 완료: {output_path}"
-    )
-
+    print(f"분석 완료: {output_path}")
     return output_path
 
 
