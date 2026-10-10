@@ -3,7 +3,6 @@ transcriber.py
 faster-whisper 기반 오디오 전사 모듈.
 """
 
-import os
 import time
 import json
 import math
@@ -22,9 +21,6 @@ from tqdm import tqdm
 MODEL_NAME = "large-v3"
 COMPUTE_TYPE = "float16"
 LANGUAGE = "ko"
-OUTPUT_DIR = "/content/transcripts"
-
-
 # --------------------------------------------------
 # 1. 모델 로드
 # --------------------------------------------------
@@ -75,8 +71,10 @@ def run_transcription_chunked(
     audio_path: Path,
     work_dir: Path,
     initial_prompt=None,
+    audio_name: Optional[str] = None,
 ):
     audio_path, work_dir = Path(audio_path), Path(work_dir)
+    audio_name = audio_name or audio_path.stem
     work_dir.mkdir(parents=True, exist_ok=True)
 
     duration = get_duration(audio_path)
@@ -84,29 +82,50 @@ def run_transcription_chunked(
     chunk_len = duration / n          # 균등 분할
     print(f"[분할] 총 {duration/60:.1f}분 -> {n}개 조각 (조각당 약 {chunk_len/60:.1f}분)")
 
-    all_segments, total_elapsed = [], 0.0
+    chunk_paths = []
 
     for i in range(n):
         core_start = i * chunk_len
         core_end = duration if i == n - 1 else (i + 1) * chunk_len
         is_last = (i == n - 1)
 
-        cache = work_dir / f"chunk_{i:03d}.json"
+        chunk_number = i + 1
+        cache = work_dir / f"{audio_name}_chunk_{chunk_number:03d}.json"
         if cache.exists():                      # 이어하기
-            kept = json.loads(cache.read_text(encoding="utf-8"))
+            cached_data = json.loads(cache.read_text(encoding="utf-8"))
+            if isinstance(cached_data, dict):
+                kept = cached_data.get("segments", [])
+                elapsed = cached_data.get("elapsed_sec")
+            else:
+                kept = cached_data
+                elapsed = None
+
+            if not isinstance(kept, list):
+                raise ValueError(f"잘못된 청크 캐시 형식입니다: {cache}")
+
+            save_chunk_result(
+                audio_name=audio_name,
+                chunk_index=chunk_number,
+                chunk_count=n,
+                audio_duration_sec=duration,
+                chunk_start_sec=core_start,
+                chunk_end_sec=core_end,
+                elapsed_sec=elapsed,
+                segments=kept,
+                output_path=cache,
+            )
             print(f"[{i+1}/{n}] 캐시 사용")
-            all_segments.extend(kept)
+            chunk_paths.append(cache)
             continue
 
         # 실제로 자르는 범위 = 담당 구간 + 앞뒤 여유
         cut_start = max(0.0, core_start - PRE_PAD_SEC)
         cut_end = min(duration, core_end + POST_PAD_SEC)
-        wav = work_dir / f"chunk_{i:03d}.wav"
+        wav = work_dir / f"{audio_name}_chunk_{chunk_number:03d}.wav"
         cut_chunk(audio_path, wav, cut_start, cut_end - cut_start)
 
         print(f"[{i+1}/{n}] {core_start/60:.1f}~{core_end/60:.1f}분 전사 중")
         segs, elapsed = run_transcription(model, wav, initial_prompt)
-        total_elapsed += elapsed
         wav.unlink(missing_ok=True)
 
         # 전체 타임라인으로 변환 후, "시작 시각이 담당 구간 안인 것"만 채택
@@ -121,12 +140,21 @@ def run_transcription_chunked(
                     "text": s["text"],
                 })
 
-        cache.write_text(json.dumps(kept, ensure_ascii=False), encoding="utf-8")
-        all_segments.extend(kept)
+        save_chunk_result(
+            audio_name=audio_name,
+            chunk_index=chunk_number,
+            chunk_count=n,
+            audio_duration_sec=duration,
+            chunk_start_sec=core_start,
+            chunk_end_sec=core_end,
+            elapsed_sec=elapsed,
+            segments=kept,
+            output_path=cache,
+        )
+        chunk_paths.append(cache)
 
-    all_segments.sort(key=lambda x: x["start"])
-    print(f"[전체 완료] {len(all_segments)}개 구간 - 전사 합계 {total_elapsed:.1f}초")
-    return all_segments, total_elapsed
+    print(f"[전체 완료] {len(chunk_paths)}개 청크 파일 저장")
+    return chunk_paths
 def run_transcription(
     model: WhisperModel,
     audio_path: Path,
@@ -170,28 +198,37 @@ def run_transcription(
 # 3. 결과 저장
 # --------------------------------------------------
 
-def save_result(
+def save_chunk_result(
     audio_name: str,
+    chunk_index: int,
+    chunk_count: int,
+    audio_duration_sec: float,
+    chunk_start_sec: float,
+    chunk_end_sec: float,
+    elapsed_sec: Optional[float],
     segments: list[dict],
-    elapsed_sec: float,
+    output_path: Path,
 ) -> Path:
-    """전사 결과를 json으로 저장하고 저장 경로를 반환한다."""
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-
+    """청크 전사 결과와 메타데이터를 JSON으로 저장한다."""
     payload = {
         "audio_source": audio_name,
         "model": MODEL_NAME,
-        "elapsed_sec": round(elapsed_sec, 1),
+        "chunk_index": chunk_index,
+        "chunk_count": chunk_count,
+        "audio_duration_sec": round(audio_duration_sec, 2),
+        "chunk_start_sec": round(chunk_start_sec, 2),
+        "chunk_end_sec": round(chunk_end_sec, 2),
+        "elapsed_sec": round(elapsed_sec, 1) if elapsed_sec is not None else None,
         "num_segments": len(segments),
         "segments": segments,
     }
 
-    out_path = Path(OUTPUT_DIR) / f"{audio_name}_{MODEL_NAME}.json"
-    with open(out_path, "w", encoding="utf-8") as f:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
-    print(f"[저장 완료] {out_path}")
-    return out_path
+    print(f"[청크 저장 완료] {output_path}")
+    return output_path
 
 
 # --------------------------------------------------
@@ -201,9 +238,9 @@ def save_result(
 def transcribe_audio(
     audio_path: Optional[str] = None,
     initial_prompt: Optional[str] = None,
-) -> Path:
+) -> list[Path]:
     """
-    오디오 파일을 전사하고 결과 json 경로를 반환한다.
+    오디오 파일을 청크별로 전사하고 각 json 경로를 반환한다.
     - audio_path가 없으면 input()으로 받는다.
     - initial_prompt는 실험적으로 바뀔 수 있어 인자로 남겨둠.
     - 그 외 설정값(모델명, compute_type, language, output_dir)은
@@ -220,11 +257,13 @@ def transcribe_audio(
     print(f"입력된 파일: {audio_name}")
 
     model = load_model()
-    segments, elapsed_sec = run_transcription_chunked(
-        model, audio_path, "/content/chunks", initial_prompt
+    return run_transcription_chunked(
+        model,
+        audio_path,
+        "/content/chunks",
+        initial_prompt,
+        audio_name=audio_name,
     )
-
-    return save_result(audio_name, segments, elapsed_sec)
 
 
 if __name__ == "__main__":

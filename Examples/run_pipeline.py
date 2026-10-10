@@ -22,16 +22,19 @@ def run(vod_url: str = None, output_dir: str = ".") -> None:
     audio_path = audio_down(vod_url=vod_url, output_dir=output_dir)
 
     # 2. 전사
-    transcript_json_path = transcribe_audio(audio_path)
+    transcript_json_paths = transcribe_audio(audio_path)
+    analysis_results = []
 
-    # 3. csv 변환 (선택)
-    json_to_csv(transcript_json_path)
+    for transcript_json_path in transcript_json_paths:
+        # 3. csv 변환 (선택)
+        json_to_csv(transcript_json_path)
 
-    # 4. LLM 분석
-    analysis_result = analyze_subtitle(transcript_json_path)
+        # 4. 청크별 LLM 분석
+        analysis_results.append(analyze_subtitle(transcript_json_path))
 
     print("\n" + "=" * 30 + " 분석 결과 " + "=" * 30)
-    print(analysis_result)
+    for analysis_result in analysis_results:
+        print(analysis_result)
     print("=" * 71)
 
 

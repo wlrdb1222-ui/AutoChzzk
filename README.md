@@ -35,9 +35,10 @@ from AutoChzzk import audio_down, transcribe_audio, analyze_subtitle, json_to_cs
 
 # 자동 (파라미터를 다 채움)
 audio_path = audio_down(vod_url="https://chzzk.naver.com/video/12345")
-transcript_json_path = transcribe_audio(audio_path)
-json_to_csv(transcript_json_path)
-result = analyze_subtitle(transcript_json_path)
+transcript_json_paths = transcribe_audio(audio_path)
+for transcript_json_path in transcript_json_paths:
+  json_to_csv(transcript_json_path)
+  result = analyze_subtitle(transcript_json_path)
 
 # 수동 (비워두면 input()으로 물어봄)
 audio_path = audio_down()
