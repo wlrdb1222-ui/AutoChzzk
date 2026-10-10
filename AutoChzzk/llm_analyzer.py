@@ -452,7 +452,22 @@ def save_analysis(
 
 
 def analyze_subtitle(subtitle_paths=None, chat_data_path=None, chat_summary_mode="spike"):
-    """여러 자막 JSON과 선택적 채팅 데이터를 분석한다."""
+    """
+    여러 자막 JSON + 선택적 채팅 데이터를 분석한다.
+
+    subtitle_paths:
+        전사 JSON 파일 경로 목록
+
+    chat_data_path:
+        채팅 통계 CSV 경로
+
+    chat_summary_mode:
+        "spike" 또는 "full"
+    """
+
+    # ----------------------------------------------
+    # 자막 경로 입력 및 검증
+    # ----------------------------------------------
 
     if subtitle_paths is None:
         subtitle_paths = input("자막 JSON 파일 경로들을 쉼표로 구분해 입력하세요: ").strip().split(",")
@@ -467,6 +482,10 @@ def analyze_subtitle(subtitle_paths=None, chat_data_path=None, chat_summary_mode
         if not subtitle_path.exists():
             raise FileNotFoundError(f"자막 파일을 찾을 수 없습니다: {subtitle_path}")
 
+    # ----------------------------------------------
+    # 채팅 데이터
+    # ----------------------------------------------
+
     chat_summary_text = ""
 
     if chat_data_path is not None:
@@ -478,18 +497,36 @@ def analyze_subtitle(subtitle_paths=None, chat_data_path=None, chat_summary_mode
         chat_buckets = load_chat_data(chat_data_path)
         chat_summary_text = build_chat_summary_text(chat_buckets, mode=chat_summary_mode)
 
+    # ----------------------------------------------
+    # 자막 구간 생성 및 방송 길이 계산
+    # ----------------------------------------------
+
     subtitle_sections = build_subtitle_sections([str(path) for path in subtitle_paths])
     duration_sec = sum(get_subtitle_duration(load_subtitle(path)) for path in subtitle_paths)
+
+    # ----------------------------------------------
+    # LLM 분석
+    # ----------------------------------------------
 
     count_llm_token(subtitle_text=subtitle_sections, chat_summary_text=chat_summary_text, duration_sec=duration_sec)
     raw_result = run_llm_analysis(subtitle_text=subtitle_sections, chat_summary_text=chat_summary_text, duration_sec=duration_sec)
 
+    # ----------------------------------------------
+    # 결과 파싱
+    # ----------------------------------------------
+
     results = parse_analysis_result(raw_result)
+
+    # ----------------------------------------------
+    # 결과 저장
+    # ----------------------------------------------
+
     audio_name = subtitle_paths[0].stem
     output_path = save_analysis(audio_name=audio_name, results=results)
 
     print(f"분석 완료: {output_path}")
     return output_path
+
 
 
 # --------------------------------------------------
