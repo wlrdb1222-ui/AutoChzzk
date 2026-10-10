@@ -484,7 +484,7 @@ def analyze_subtitle(
     # ----------------------------------------------
     # LLM 분석
     # ----------------------------------------------
-    count_llm_analysis(
+    count_llm_token(
         subtitle_text=subtitle_text,
         chat_summary_text=chat_summary_text,
         duration_sec=duration_sec,
