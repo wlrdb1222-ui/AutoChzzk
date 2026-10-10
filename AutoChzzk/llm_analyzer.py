@@ -110,25 +110,82 @@ def build_subtitle_sections(json_paths: list[str]) -> str:
     sections = []
 
     for index, json_path in enumerate(json_paths, 1):
-        with open(json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        path = Path(json_path)
 
-        start = data.get("chunk_start_sec", 0)
-        end = data.get("chunk_end_sec", start + data.get("audio_duration_sec", 0))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except UnicodeDecodeError:
+            data = json.loads(path.read_text(encoding="cp949"))
+
+        chunk_start = float(data.get("chunk_start_sec", 0))
+        chunk_end = data.get("chunk_end_sec")
         segments = data.get("segments", [])
 
-        subtitle_text = "\n".join(
-            f"[{segment['start']:.2f}~{segment['end']:.2f}] {segment['text']}"
-            for segment in segments
+        if not isinstance(segments, list):
+            raise ValueError(f"segments 형식이 잘못되었습니다: {path}")
+
+        segment_ends = [float(s["end"]) for s in segments if isinstance(s.get("end"), (int, float))]
+        chunk_duration = float(chunk_end) - chunk_start if chunk_end is not None else None
+
+        is_relative = (
+            chunk_start > 0
+            and chunk_duration is not None
+            and segment_ends
+            and max(segment_ends) <= chunk_duration + 1
+        )
+
+        offset = chunk_start if is_relative else 0
+        subtitle_lines = []
+
+        for segment in segments:
+            if "start" not in segment or "end" not in segment:
+                continue
+
+            start = float(segment["start"]) + offset
+            end = float(segment["end"]) + offset
+            text = segment.get("text", "").strip()
+
+            subtitle_lines.append(f"[{start:.2f}~{end:.2f}] {text}")
+
+        actual_start = chunk_start
+        actual_end = float(chunk_end) if chunk_end is not None else max(
+            (float(s["end"]) + offset for s in segments if isinstance(s.get("end"), (int, float))),
+            default=actual_start
         )
 
         sections.append(
             f"## 분석 구간 {index}\n"
-            f"핵심 분석 범위: {start:.2f} ~ {end:.2f}초\n\n"
-            f"{subtitle_text}"
+            f"핵심 분석 범위: {actual_start:.2f} ~ {actual_end:.2f}초\n\n"
+            + "\n".join(subtitle_lines)
         )
 
     return "\n\n".join(sections)
+
+def get_total_duration(json_paths: list[str]) -> float:
+    """여러 청크 JSON에서 전체 방송 길이를 계산한다."""
+
+    duration = 0.0
+
+    for json_path in json_paths:
+        path = Path(json_path)
+
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except UnicodeDecodeError:
+            data = json.loads(path.read_text(encoding="cp949"))
+
+        if data.get("chunk_end_sec") is not None:
+            duration = max(duration, float(data["chunk_end_sec"]))
+            continue
+
+        chunk_start = float(data.get("chunk_start_sec", 0))
+        segment_ends = [float(s["end"]) for s in data.get("segments", []) if isinstance(s.get("end"), (int, float))]
+
+        if segment_ends:
+            duration = max(duration, chunk_start + max(segment_ends))
+
+    return duration
+
 # --------------------------------------------------
 # 자막
 # --------------------------------------------------
@@ -307,49 +364,38 @@ def build_chat_summary_text(
 # LLM
 # --------------------------------------------------
 
-def run_llm_analysis(
-    subtitle_text: str,
-    chat_summary_text: str = "",
-    duration_sec: Optional[float] = None,
-) -> str:
-    """
-    자막과 채팅 데이터를 Gemini에 전달해 분석한다.
-    """
+def run_llm_analysis(subtitle_sections: str, chat_summary_text: str = "", duration_sec: Optional[float] = None) -> str:
+    """여러 자막 구간과 채팅 데이터를 Gemini에 전달해 분석한다."""
 
     prompt = build_prompt(
-        subtitle_text=subtitle_text,
+        subtitle_sections=subtitle_sections,
         chat_section=chat_summary_text,
         duration_sec=duration_sec,
     )
 
     client = get_llm_client()
+    response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
 
-    response = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=prompt,
-    )
+    if not response.text:
+        raise ValueError("Gemini에서 분석 결과를 반환하지 않았습니다.")
 
     return response.text
-def count_llm_token(
-    subtitle_text: str,
-    chat_summary_text: str = "",
-    duration_sec: Optional[float] = None,
-) -> str:
-    
+
+def count_llm_token(subtitle_sections: str, chat_summary_text: str = "", duration_sec: Optional[float] = None) -> int:
+    """Gemini 요청에 포함될 입력 토큰 수를 계산한다."""
+
     prompt = build_prompt(
-        subtitle_text=subtitle_text,
+        subtitle_sections=subtitle_sections,
         chat_section=chat_summary_text,
         duration_sec=duration_sec,
     )
-    
+
     client = get_llm_client()
-    
-    token_count = client.models.count_tokens(
-        model=MODEL_NAME,
-        contents=prompt,
-    ).total_tokens
-    
+    token_count = client.models.count_tokens(model=MODEL_NAME, contents=prompt).total_tokens
+
     print(f"입력 토큰 수: {token_count:,}")
+    return token_count
+
 
 # --------------------------------------------------
 # 결과 파싱
@@ -453,7 +499,7 @@ def save_analysis(
 
 def analyze_subtitle(subtitle_paths=None, chat_data_path=None, chat_summary_mode="spike"):
     """
-    여러 자막 JSON + 선택적 채팅 데이터를 분석한다.
+    여러 자막 JSON과 선택적 채팅 데이터를 분석한다.
 
     subtitle_paths:
         전사 JSON 파일 경로 목록
@@ -471,15 +517,17 @@ def analyze_subtitle(subtitle_paths=None, chat_data_path=None, chat_summary_mode
 
     if subtitle_paths is None:
         subtitle_paths = input("자막 JSON 파일 경로들을 쉼표로 구분해 입력하세요: ").strip().split(",")
-        subtitle_paths = [path.strip() for path in subtitle_paths if path.strip()]
 
-    subtitle_paths = [Path(path) for path in subtitle_paths]
+    if isinstance(subtitle_paths, (str, Path)):
+        subtitle_paths = [subtitle_paths]
+
+    subtitle_paths = [Path(path.strip()) if isinstance(path, str) else Path(path) for path in subtitle_paths if str(path).strip()]
 
     if not subtitle_paths:
         raise ValueError("자막 JSON 파일 경로가 입력되지 않았습니다.")
 
     for subtitle_path in subtitle_paths:
-        if not subtitle_path.exists():
+        if not subtitle_path.is_file():
             raise FileNotFoundError(f"자막 파일을 찾을 수 없습니다: {subtitle_path}")
 
     # ----------------------------------------------
@@ -491,7 +539,7 @@ def analyze_subtitle(subtitle_paths=None, chat_data_path=None, chat_summary_mode
     if chat_data_path is not None:
         chat_data_path = Path(chat_data_path)
 
-        if not chat_data_path.exists():
+        if not chat_data_path.is_file():
             raise FileNotFoundError(f"채팅 파일을 찾을 수 없습니다: {chat_data_path}")
 
         chat_buckets = load_chat_data(chat_data_path)
@@ -502,14 +550,15 @@ def analyze_subtitle(subtitle_paths=None, chat_data_path=None, chat_summary_mode
     # ----------------------------------------------
 
     subtitle_sections = build_subtitle_sections([str(path) for path in subtitle_paths])
-    duration_sec = sum(get_subtitle_duration(load_subtitle(path)) for path in subtitle_paths)
+    duration_sec = get_total_duration([str(path) for path in subtitle_paths])
 
     # ----------------------------------------------
     # LLM 분석
     # ----------------------------------------------
 
-    count_llm_token(subtitle_text=subtitle_sections, chat_summary_text=chat_summary_text, duration_sec=duration_sec)
-    raw_result = run_llm_analysis(subtitle_text=subtitle_sections, chat_summary_text=chat_summary_text, duration_sec=duration_sec)
+    count_llm_token(subtitle_sections=subtitle_sections, chat_summary_text=chat_summary_text, duration_sec=duration_sec)
+
+    raw_result = run_llm_analysis(subtitle_sections=subtitle_sections, chat_summary_text=chat_summary_text, duration_sec=duration_sec)
 
     # ----------------------------------------------
     # 결과 파싱
@@ -526,6 +575,7 @@ def analyze_subtitle(subtitle_paths=None, chat_data_path=None, chat_summary_mode
 
     print(f"분석 완료: {output_path}")
     return output_path
+
 
 
 
