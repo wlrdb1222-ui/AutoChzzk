@@ -1,4 +1,4 @@
-
+from collections import deque
 from pathlib import Path
 import subprocess
 import re
@@ -191,6 +191,7 @@ def _run_aria2c(command: list[str], total_segments: int | None = None) -> int:
 
     done = 0
     error_count = 0
+    recent_lines = deque(maxlen=30)
     start = time.monotonic()
     last_draw = 0.0
     in_progress = False
@@ -214,6 +215,8 @@ def _run_aria2c(command: list[str], total_segments: int | None = None) -> int:
         line = raw.strip()
         if not line:
             continue
+
+        recent_lines.append(line)
 
         # 오류/경고만 바를 끊고 출력
         if "ERROR" in line or "WARN" in line:
@@ -253,6 +256,11 @@ def _run_aria2c(command: list[str], total_segments: int | None = None) -> int:
         print()
     if error_count:
         print(f"경고/오류 로그 {error_count}줄 발생")
+
+    if proc.returncode != 0 and recent_lines:
+        print("\n--- aria2c 마지막 출력 ---")
+        for l in recent_lines:
+            print(l)
 
     return proc.returncode
 
