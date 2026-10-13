@@ -166,12 +166,19 @@ def _total_speed(line: str) -> str:
         return f"{total / 1024**2:.1f}MiB/s"
     return f"{total / 1024:.0f}KiB/s"
 
+def _fmt_time(sec: float) -> str:
+    sec = int(max(sec, 0))
+    h, rem = divmod(sec, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
 
 def _run_aria2c(command: list[str], total_segments: int | None = None) -> int:
-    """aria2c를 실행하고 진행 바를 그린다.
+    """aria2c를 실행하고 진행 바를 한 줄로 그린다.
 
     total_segments가 None이면 단일 파일(퍼센트 기준),
     값이 있으면 세그먼트 완료 개수 기준으로 바를 그린다.
+    ERROR/WARN 줄 외의 출력은 모두 무시한다.
     """
     proc = subprocess.Popen(
         command,
@@ -182,51 +189,70 @@ def _run_aria2c(command: list[str], total_segments: int | None = None) -> int:
     )
 
     done = 0
+    error_count = 0
+    start = time.monotonic()
+    last_draw = 0.0
     in_progress = False
 
     def draw(text: str) -> None:
         nonlocal in_progress
-        print("\r" + text.ljust(100), end="", flush=True)
+        width = min(shutil.get_terminal_size(fallback=(80, 20)).columns - 1, 100)
+        print("\r" + text[:width].ljust(width), end="", flush=True)
         in_progress = True
+
+    def segment_text() -> str:
+        elapsed = time.monotonic() - start
+        eta = (elapsed / done) * (total_segments - done) if done else 0
+        eta_text = _fmt_time(eta) if done else "-"
+        return (
+            f"{_bar(done / total_segments)} {done}/{total_segments} "
+            f"· 경과 {_fmt_time(elapsed)} · ETA {eta_text}"
+        )
 
     for raw in proc.stdout:
         line = raw.strip()
         if not line:
             continue
 
-        # 세그먼트 모드: 완료 알림 개수를 센다
-        if total_segments is not None and "Download complete" in line:
-            done += 1
-            draw(f"{_bar(done / total_segments)} {done}/{total_segments}")
+        # 오류/경고만 바를 끊고 출력
+        if "ERROR" in line or "WARN" in line:
+            error_count += 1
+            if in_progress:
+                print()
+                in_progress = False
+            print(line, flush=True)
             continue
 
+        # 세그먼트 모드: 완료 알림만 센다 (0.1초 간격으로만 다시 그림)
+        if total_segments is not None:
+            if "Download complete" in line:
+                done += 1
+                now = time.monotonic()
+                if now - last_draw >= 0.1 or done == total_segments:
+                    draw(segment_text())
+                    last_draw = now
+            continue
+
+        # 단일 파일 모드: [# 진행 줄만 사용
         if line.startswith("[#"):
-            if total_segments is None:
-                m = _SINGLE_RE.search(line)
-                if m:
-                    cur, total, pct, speed, eta = m.groups()
-                    draw(
-                        f"{_bar(int(pct) / 100)} {pct}% "
-                        f"{cur}/{total} {speed}/s ETA:{eta or '-'}"
-                    )
-            else:
+            m = _SINGLE_RE.search(line)
+            if m:
+                cur, total, pct, speed, eta = m.groups()
                 draw(
-                    f"{_bar(done / total_segments)} {done}/{total_segments} "
-                    f"{_total_speed(line)}"
+                    f"{_bar(int(pct) / 100)} {pct}% "
+                    f"{cur}/{total} {speed}/s ETA:{eta or '-'}"
                 )
-            continue
-
-        if line.startswith(("***", "===", "FILE:", "---")):
-            continue
-
-        if in_progress:
-            print()
-            in_progress = False
-        print(line, flush=True)
 
     proc.wait()
+
+    # 마지막 상태를 한 번 더 그려서 최종 값이 보이게 함
+    if total_segments is not None and done:
+        draw(segment_text())
     if in_progress:
         print()
+    if error_count:
+        print(f"경고/오류 로그 {error_count}줄 발생")
+
     return proc.returncode
 
 # def _run_aria2c(command: list[str], total_files: int | None = None) -> int:
