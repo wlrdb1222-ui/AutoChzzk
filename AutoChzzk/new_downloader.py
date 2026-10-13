@@ -3,7 +3,8 @@ from pathlib import Path
 import subprocess
 import re
 from .segment_maker import SegmentInfo 
-
+import shutil
+import time
 from tqdm.auto import tqdm
 DEFAULT_CONNECTIONS = 16
 DEFAULT_RETRIES = 5
