@@ -32,8 +32,8 @@ CHAT_SPIKE_THRESHOLD = 1.5
 # 이벤트가 지나치게 길어지는 것을 방지하기 위한 참고값
 MAX_EVENT_INTERVAL_SEC = 300
 
-PROMPT_PATH = Path(__file__).parent / "prompts" / "prompt.txt"
-
+# PROMPT_PATH = Path(__file__).parent / "prompts" / "prompt.txt"
+PROMPT_PATH = Path(__file__).parent / "prompts" / "analysis_prompt.txt"
 
 # --------------------------------------------------
 # 프롬프트
