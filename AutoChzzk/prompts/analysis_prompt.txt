@@ -186,7 +186,7 @@ summary는 해당 구간에서 실제로 일어난 일을 1~2문장으로 요약
 
 ## 자막
 
-{subtitle_text}
+{subtitle_sections}
 
 
 ## 채팅 통계
