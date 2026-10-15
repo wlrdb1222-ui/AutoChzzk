@@ -41,6 +41,33 @@ def download_mp4(url: str, output_path: str | Path) -> Path:
         raise RuntimeError(f"MP4 download failed: aria2c exited with code {returncode}")
 
     return output_path
+def _remux_mp4(input_path: str | Path, output_path: str | Path | None = None) -> Path:
+    """fMP4를 재인코딩 없이 일반 MP4로 리먹싱한다."""
+    input_path = Path(input_path)
+    output_path = Path(output_path) if output_path else input_path
+
+    # 입력과 출력이 같으면 임시 파일을 거쳐 덮어쓴다
+    tmp_path = output_path.with_name(f".{output_path.stem}.remux.mp4")
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-i", str(input_path),
+        "-c", "copy",
+        "-movflags", "+faststart",
+        str(tmp_path),
+    ]
+
+    result = subprocess.run(command)
+
+    if result.returncode != 0:
+        tmp_path.unlink(missing_ok=True)
+        raise RuntimeError(f"ffmpeg remux failed: exit code {result.returncode}")
+
+    tmp_path.replace(output_path)
+    return output_path
 
 def download_segments(segments: list[str], output_path: str | Path, connections: int = DEFAULT_CONNECTIONS, retries: int = DEFAULT_RETRIES) -> Path:
     """세그먼트를 병렬 다운로드하고 하나의 파일로 합친다."""
@@ -102,34 +129,6 @@ def download_segments(segments: list[str], output_path: str | Path, connections:
             pass
 
     return _remux_mp4(output_path)
-
-def _remux_mp4(input_path: str | Path, output_path: str | Path | None = None) -> Path:
-    """fMP4를 재인코딩 없이 일반 MP4로 리먹싱한다."""
-    input_path = Path(input_path)
-    output_path = Path(output_path) if output_path else input_path
-
-    # 입력과 출력이 같으면 임시 파일을 거쳐 덮어쓴다
-    tmp_path = output_path.with_name(f".{output_path.stem}.remux.mp4")
-
-    command = [
-        "ffmpeg",
-        "-y",
-        "-hide_banner",
-        "-loglevel", "error",
-        "-i", str(input_path),
-        "-c", "copy",
-        "-movflags", "+faststart",
-        str(tmp_path),
-    ]
-
-    result = subprocess.run(command)
-
-    if result.returncode != 0:
-        tmp_path.unlink(missing_ok=True)
-        raise RuntimeError(f"ffmpeg remux failed: exit code {result.returncode}")
-
-    tmp_path.replace(output_path)
-    return output_path
 def _create_aria2_input(segments: list[str], input_file: Path) -> None:
     """aria2c 입력 파일을 생성한다."""
     lines = []
