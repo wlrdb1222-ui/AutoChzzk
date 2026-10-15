@@ -101,7 +101,7 @@ def download_segments(segments: list[str], output_path: str | Path, connections:
         except OSError:
             pass
 
-    return remux_mp4(output_path)
+    return _remux_mp4(output_path)
 
 def _remux_mp4(input_path: str | Path, output_path: str | Path | None = None) -> Path:
     """fMP4를 재인코딩 없이 일반 MP4로 리먹싱한다."""
