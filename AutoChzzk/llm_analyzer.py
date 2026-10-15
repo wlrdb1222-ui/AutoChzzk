@@ -400,52 +400,16 @@ def count_llm_token(subtitle_sections: str, chat_summary_text: str = "", duratio
 # --------------------------------------------------
 # 결과 파싱
 # --------------------------------------------------
-
-def parse_analysis_result(raw_text: str) -> list:
-    """
-    LLM 응답에서 JSON 배열을 추출한다.
-    """
-
-    text = raw_text.strip()
-
-    # Markdown 코드블록 제거
-    text = re.sub(
-        r"^```(?:json)?\s*",
-        "",
-        text,
-        flags=re.IGNORECASE,
-    )
-
-    text = re.sub(
-        r"\s*```$",
-        "",
-        text,
-    )
-
-    # JSON 배열 시작/끝 찾기
-    start = text.find("[")
-    end = text.rfind("]")
-
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError(
-            "LLM 응답에서 JSON 배열을 찾을 수 없습니다."
-        )
-
-    json_text = text[start:end + 1]
+def parse_analysis_result(raw_text: str) -> dict:
+    """LLM 응답 전체를 JSON 객체로 파싱한다."""
 
     try:
-        result = json.loads(json_text)
-
+        result = json.loads(raw_text.strip())
     except json.JSONDecodeError as e:
-        raise ValueError(
-            f"LLM 응답 JSON 파싱 실패: {e}\n\n"
-            f"응답 내용:\n{raw_text}"
-        ) from e
+        raise ValueError(f"LLM 응답 JSON 파싱 실패: {e}\n\n응답 내용:\n{raw_text}") from e
 
-    if not isinstance(result, list):
-        raise ValueError(
-            "LLM 결과가 JSON 배열이 아닙니다."
-        )
+    if not isinstance(result, dict):
+        raise ValueError("LLM 결과가 JSON 객체가 아닙니다.")
 
     return result
 
