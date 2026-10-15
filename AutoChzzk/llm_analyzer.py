@@ -8,7 +8,8 @@ LLM의 분석 규칙과 프롬프트 내용은 prompts/prompt.txt에서 관리�
 이 모듈은 파일 처리, 데이터 계산, 프롬프트 조립, LLM 호출,
 결과 파싱 및 저장을 담당한다.
 """
-
+import time
+from google.genai import errors
 import os
 import csv
 import json
@@ -282,11 +283,23 @@ def run_llm_analysis(
 
     client = get_llm_client()
 
-    response = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=prompt,
-    )
-
+    for attempt in range(20):
+        try:
+            response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
+            break
+        except errors.APIError as e:
+            if 400 <= e.code < 500 and e.code != 429:
+                raise
+    
+            if attempt == 9:
+                raise
+    
+            wait = 10 if e.code == 429 else min(2 ** attempt, 30)
+            print(f"Gemini API 오류 {e.code}: {wait}초 후 재시도 ({attempt + 1}/10)")
+            time.sleep(wait)
+    
+    if not response.text:
+        raise ValueError("Gemini에서 분석 결과를 반환하지 않았습니다.")
     return response.text
 
 
