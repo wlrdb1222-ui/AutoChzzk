@@ -198,18 +198,21 @@ def process_selection(selection: dict) -> str:
             return download_mp4(url, title+".mp3")
 
         case "audio_hls":
-            return download_mp4(url, title+".mp3")
+            return convert_to_mp3(download_mp4(url, title+".mp4"))
 
         case "audio_m3u8":
-            return download_segments(make_segments_from_m3u8(url, quality), title+".mp3")
+            source = make_segments_from_m3u8(url, quality)
+            return convert_to_mp3(download_segments([segment.url for segment in source], title+".mp4"))
 
         case "hls":
             if start is None and end is None:
                 return download_mp4(url, title+".mp4")
-            return download_segments(make_segments_from_mpd(url, quality, start, end), title+".mp4")
+            source = make_segments_from_mpd(url, quality, start, end)
+            return download_segments([segment.url for segment in source], title+".mp4")
 
         case "m3u8":
-            return download_segments(make_segments_from_m3u8(url, quality, start, end), title+".mp4")
+            source = make_segments_from_m3u8(url, quality, start, end)
+            return download_segments([segment.url for segment in source], title+".mp4")
 
         case _:
             raise ValueError(f"알 수 없는 type: {type_}")
