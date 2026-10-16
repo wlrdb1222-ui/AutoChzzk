@@ -395,7 +395,7 @@ def run_llm_analysis(
             if attempt == MAX_RETRIES - 1:
                 raise
 
-            wait = 10 if e.code == 429 else min(2 ** attempt, 30)
+            wait = 60 if e.code == 429 else min(2 ** attempt, 30)
             print(f"Gemini API 오류 {e.code}: {wait}초 후 재시도 ({attempt + 1}/{MAX_RETRIES})")
             time.sleep(wait)
 
