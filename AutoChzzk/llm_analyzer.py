@@ -15,6 +15,7 @@ import json
 import re
 from pathlib import Path
 from typing import Optional
+from google.genai import errors
 
 from .llm_client import get_llm_client
 
@@ -363,6 +364,9 @@ def build_chat_summary_text(
 # --------------------------------------------------
 # LLM
 # --------------------------------------------------
+MAX_RETRIES = 20
+
+
 def run_llm_analysis(
     subtitle_text: str,
     chat_summary_text: str = "",
@@ -380,23 +384,27 @@ def run_llm_analysis(
 
     client = get_llm_client()
 
-    for attempt in range(20):
+    response = None
+    for attempt in range(MAX_RETRIES):
         try:
             response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
             break
         except errors.APIError as e:
-            if 400 <= e.code < 500 and e.code != 429:
+            # 429(요청 한도)를 제외한 4xx는 재시도해도 소용없으므로 바로 실패
+            if e.code is not None and 400 <= e.code < 500 and e.code != 429:
                 raise
-    
-            if attempt == 9:
+
+            # 마지막 시도였다면 그대로 실패
+            if attempt == MAX_RETRIES - 1:
                 raise
-    
+
             wait = 10 if e.code == 429 else min(2 ** attempt, 30)
-            print(f"Gemini API 오류 {e.code}: {wait}초 후 재시도 ({attempt + 1}/10)")
+            print(f"Gemini API 오류 {e.code}: {wait}초 후 재시도 ({attempt + 1}/{MAX_RETRIES})")
             time.sleep(wait)
-    
-    if not response.text:
+
+    if response is None or not response.text:
         raise ValueError("Gemini에서 분석 결과를 반환하지 않았습니다.")
+
     return response.text
 
 def count_llm_token(subtitle_sections: str, chat_summary_text: str = "", duration_sec: Optional[float] = None) -> int:
