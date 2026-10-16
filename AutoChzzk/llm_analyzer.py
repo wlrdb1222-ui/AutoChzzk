@@ -366,18 +366,15 @@ def build_chat_summary_text(
 # --------------------------------------------------
 MAX_RETRIES = 20
 
-
 def run_llm_analysis(
-    subtitle_text: str,
+    subtitle_sections: str,
     chat_summary_text: str = "",
     duration_sec: Optional[float] = None,
 ) -> str:
-    """
-    자막과 채팅 데이터를 Gemini에 전달해 분석한다.
-    """
+    """여러 자막 구간과 채팅 데이터를 Gemini에 전달해 분석한다."""
 
     prompt = build_prompt(
-        subtitle_text=subtitle_text,
+        subtitle_sections=subtitle_sections,
         chat_section=chat_summary_text,
         duration_sec=duration_sec,
     )
