@@ -363,22 +363,40 @@ def build_chat_summary_text(
 # --------------------------------------------------
 # LLM
 # --------------------------------------------------
-
-def run_llm_analysis(subtitle_sections: str, chat_summary_text: str = "", duration_sec: Optional[float] = None) -> str:
-    """여러 자막 구간과 채팅 데이터를 Gemini에 전달해 분석한다."""
+def run_llm_analysis(
+    subtitle_text: str,
+    chat_summary_text: str = "",
+    duration_sec: Optional[float] = None,
+) -> str:
+    """
+    자막과 채팅 데이터를 Gemini에 전달해 분석한다.
+    """
 
     prompt = build_prompt(
-        subtitle_sections=subtitle_sections,
+        subtitle_text=subtitle_text,
         chat_section=chat_summary_text,
         duration_sec=duration_sec,
     )
 
     client = get_llm_client()
-    response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
 
+    for attempt in range(20):
+        try:
+            response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
+            break
+        except errors.APIError as e:
+            if 400 <= e.code < 500 and e.code != 429:
+                raise
+    
+            if attempt == 9:
+                raise
+    
+            wait = 10 if e.code == 429 else min(2 ** attempt, 30)
+            print(f"Gemini API 오류 {e.code}: {wait}초 후 재시도 ({attempt + 1}/10)")
+            time.sleep(wait)
+    
     if not response.text:
         raise ValueError("Gemini에서 분석 결과를 반환하지 않았습니다.")
-
     return response.text
 
 def count_llm_token(subtitle_sections: str, chat_summary_text: str = "", duration_sec: Optional[float] = None) -> int:
