@@ -262,74 +262,22 @@ def _run_aria2c(command: list[str], total_segments: int | None = None) -> int:
             print(l)
 
     return proc.returncode
-
-# def _run_aria2c(command: list[str], total_files: int | None = None) -> int:
-#     """aria2c를 실행하며 진행률을 표시하고 종료 코드를 반환한다.
-
-#     total_files가 있으면 완료된 파일 수로, 없으면 출력의 퍼센트 값으로 진행률을 갱신한다.
-#     """
-#     process = subprocess.Popen(
-#         command,
-#         stdout=subprocess.PIPE,
-#         stderr=subprocess.STDOUT,
-#         text=True,
-#         bufsize=1,
-#     )
-
-#     if total_files:
-#         bar = tqdm(total=total_files, unit="seg", desc="세그먼트")
-#     else:
-#         bar = tqdm(
-#             total=100,
-#             desc="다운로드",
-#             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}% [{elapsed}<{remaining}]{postfix}",
-#         )
-
-#     log_tail: list[str] = []
-
-#     try:
-#         for line in process.stdout:
-#             line = line.strip()
-
-#             if not line:
-#                 continue
-
-#             log_tail = (log_tail + [line])[-20:]
-
-#             if total_files:
-#                 if "Download complete" in line:
-#                     bar.update(1)
-#                 continue
-
-#             percent = PERCENT_PATTERN.search(line)
-
-#             if percent:
-#                 bar.n = int(percent.group(1))
-#                 bar.refresh()
-
-#             speed = SPEED_PATTERN.search(line)
-
-#             if speed:
-#                 bar.set_postfix_str(f"{speed.group(1)}/s")
-
-#         returncode = process.wait()
-
-#         if returncode == 0:
-#             bar.n = bar.total
-#             bar.refresh()
-#     finally:
-#         bar.close()
-
-#     if returncode != 0:
-#         print("\n".join(log_tail))
-
-#     return returncode
 def convert_to_mp3(mp4_path: str) -> str:
-    mp3_path = Path(mp4_path).with_suffix(".mp3")
+    m4a_path = Path(mp4_path).with_suffix(".m4a")
 
-    subprocess.run(
-        ["ffmpeg", "-y", "-i", str(mp4_path), "-vn", "-acodec", "libmp3lame", "-q:a", "2", str(mp3_path)],
-        check=True,
-    )
+    try:
+        # 오디오 스트림 그대로 복사 (재인코딩 없음, 몇 초)
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(mp4_path), "-vn", "-acodec", "copy", str(m4a_path)],
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError:
+        # 오디오가 AAC가 아니라 복사가 안 되는 경우만 AAC로 재인코딩
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(mp4_path), "-vn", "-acodec", "aac", "-b:a", "128k", str(m4a_path)],
+            check=True,
+            capture_output=True,
+        )
 
-    return str(mp3_path)
+    return str(m4a_path)
